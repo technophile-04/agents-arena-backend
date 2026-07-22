@@ -47,20 +47,18 @@ export class OpenCodeEventParser {
     if (type === 'step_finish') {
       const reason = stringValue(part?.reason);
       if (reason === 'tool-calls') return withSession([], sessionId);
-      if (reason === 'stop') {
-        const tokens = objectValue(part?.tokens);
-        return {
-          ...withSession([{
-            type: 'usage',
-            payload: {
-              entrantId: this.entrantId,
-              inputTokens: numberValue(tokens?.input),
-              outputTokens: numberValue(tokens?.output),
-            },
-          }], sessionId),
-          turnEnded: true,
-        };
-      }
+      const tokens = objectValue(part?.tokens);
+      return {
+        ...withSession([{
+          type: 'usage',
+          payload: {
+            entrantId: this.entrantId,
+            inputTokens: numberValue(tokens?.input),
+            outputTokens: numberValue(tokens?.output),
+          },
+        }], sessionId),
+        turnEnded: true,
+      };
     }
     if (type === 'error') {
       return withSession([{

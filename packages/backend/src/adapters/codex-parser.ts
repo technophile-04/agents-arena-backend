@@ -99,6 +99,29 @@ export class CodexEventParser {
       };
     }
 
+    if (!knownItemType(itemType)) {
+      const detail = genericToolDetail(item);
+      if (type === 'item.started') {
+        return {
+          events: [{
+            type: 'tool.call',
+            payload: { entrantId: this.entrantId, tool: itemType, detail },
+          }],
+        };
+      }
+      return {
+        events: [{
+          type: 'tool.result',
+          payload: {
+            entrantId: this.entrantId,
+            tool: itemType,
+            ok: !genericToolFailed(item),
+            detail,
+          },
+        }],
+      };
+    }
+
     this.recordUnknown(`${type}/${itemType}`);
     return { events: [] };
   }
@@ -125,6 +148,32 @@ function reasoningText(item: JsonObject): string {
     if (typeof part === 'string') return part;
     return stringValue(objectValue(part)?.text) ?? '';
   }).filter(Boolean).join('\n');
+}
+
+function knownItemType(itemType: string): boolean {
+  return itemType === 'command_execution'
+    || itemType === 'agent_message'
+    || itemType === 'reasoning'
+    || itemType === 'reasoning_summary'
+    || itemType === 'error';
+}
+
+function genericToolDetail(item: JsonObject): string {
+  for (const field of ['command', 'path', 'name', 'query', 'title', 'text']) {
+    const detail = stringValue(item[field]);
+    if (detail !== undefined) return detail.slice(0, 2_000);
+  }
+  return '';
+}
+
+function genericToolFailed(item: JsonObject): boolean {
+  const status = stringValue(item.status)?.toLowerCase();
+  if (status === 'failed' || status === 'error') return true;
+  return failureValue(item.error) || failureValue(item.message);
+}
+
+function failureValue(value: unknown): boolean {
+  return value !== undefined && value !== null;
 }
 
 function parseObject(line: string, logger: ParserLogger, harness: string): JsonObject | undefined {

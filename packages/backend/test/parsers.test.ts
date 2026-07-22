@@ -62,6 +62,71 @@ describe('CodexEventParser', () => {
     expect(logger.warn).toHaveBeenCalledOnce();
     expect(logger.info).toHaveBeenCalledOnce();
   });
+
+  it('maps generic file-change items without counting them as unknown', () => {
+    const parser = new CodexEventParser('codex-1');
+    const started = parser.parse(JSON.stringify({
+      type: 'item.started',
+      item: {
+        id: 'item-file-1',
+        type: 'file_change',
+        path: 'packages/backend/src/example.ts',
+        status: 'in_progress',
+      },
+    }));
+    const completed = parser.parse(JSON.stringify({
+      type: 'item.completed',
+      item: {
+        id: 'item-file-1',
+        type: 'file_change',
+        path: 'packages/backend/src/example.ts',
+        status: 'completed',
+      },
+    }));
+
+    expect(started.events).toEqual([{
+      type: 'tool.call',
+      payload: {
+        entrantId: 'codex-1',
+        tool: 'file_change',
+        detail: 'packages/backend/src/example.ts',
+      },
+    }]);
+    expect(completed.events).toEqual([{
+      type: 'tool.result',
+      payload: {
+        entrantId: 'codex-1',
+        tool: 'file_change',
+        ok: true,
+        detail: 'packages/backend/src/example.ts',
+      },
+    }]);
+    expect(parser.unknownEvents).toBe(0);
+  });
+
+  it('marks a generic failed item result as failed', () => {
+    const parser = new CodexEventParser('codex-1');
+    const parsed = parser.parse(JSON.stringify({
+      type: 'item.completed',
+      item: {
+        id: 'item-file-2',
+        type: 'file_change',
+        path: 'packages/backend/src/example.ts',
+        status: 'failed',
+        message: 'patch did not apply',
+      },
+    }));
+
+    expect(parsed.events).toEqual([{
+      type: 'tool.result',
+      payload: {
+        entrantId: 'codex-1',
+        tool: 'file_change',
+        ok: false,
+        detail: 'packages/backend/src/example.ts',
+      },
+    }]);
+  });
 });
 
 describe('OpenCodeEventParser', () => {
@@ -100,5 +165,41 @@ describe('OpenCodeEventParser', () => {
     expect(parser.unknownEvents).toBe(1);
     expect(logger.warn).toHaveBeenCalledOnce();
     expect(logger.info).toHaveBeenCalledOnce();
+  });
+
+  it('ends a length-limited step and preserves its usage', () => {
+    const parser = new OpenCodeEventParser('opencode-1');
+    const parsed = parser.parse(JSON.stringify({
+      type: 'step_finish',
+      sessionID: 'session-length',
+      part: { reason: 'length', tokens: { input: 321, output: 45 } },
+    }));
+
+    expect(parsed).toEqual({
+      events: [{
+        type: 'usage',
+        payload: { entrantId: 'opencode-1', inputTokens: 321, outputTokens: 45 },
+      }],
+      sessionId: 'session-length',
+      turnEnded: true,
+    });
+  });
+
+  it('ends an unrecognized step-finish reason without counting it as unknown', () => {
+    const logger = { info: vi.fn(), warn: vi.fn() };
+    const parser = new OpenCodeEventParser('opencode-1', logger);
+    const parsed = parser.parse(JSON.stringify({
+      type: 'step_finish',
+      sessionID: 'session-future',
+      part: { reason: 'future-reason', tokens: { input: 98, output: 7 } },
+    }));
+
+    expect(parsed.events).toEqual([{
+      type: 'usage',
+      payload: { entrantId: 'opencode-1', inputTokens: 98, outputTokens: 7 },
+    }]);
+    expect(parsed.turnEnded).toBe(true);
+    expect(parser.unknownEvents).toBe(0);
+    expect(logger.info).not.toHaveBeenCalled();
   });
 });
