@@ -49,7 +49,7 @@ const PRESETS: Readonly<Record<string, readonly PresetEntrant[]>> = {
     { id: 'opencode-1', harness: 'opencode', model: 'opencode-fake-1', openingPrompt: OPENING_PROMPT },
   ],
   'docker-duel': [
-    { id: 'codex-1', harness: 'codex', model: 'gpt-5-codex', openingPrompt: OPENING_PROMPT },
+    { id: 'codex-1', harness: 'codex', model: 'default', openingPrompt: OPENING_PROMPT },
     {
       id: 'opencode-1',
       harness: 'opencode',
