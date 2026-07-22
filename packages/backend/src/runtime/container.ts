@@ -145,17 +145,22 @@ class DockerRuntimeExecution implements RuntimeExecution {
 
 export class DockerEntrantContainer implements EntrantContainer {
   private readonly executions = new Map<string, DockerRuntimeExecution>();
+  private readonly pendingWriteRejectors = new Set<(error: Error) => void>();
   private activeExecution: DockerRuntimeExecution | undefined;
   private writeQueue: Promise<void> = Promise.resolve();
   private readonly ready: Promise<void>;
   private resolveReady!: () => void;
   private rejectReady!: (error: Error) => void;
+  private terminalError: Error | undefined;
+  private observedExitCode: number | null | undefined;
+  private streamFailure: Error | undefined;
+  private terminationCheck: NodeJS.Immediate | undefined;
   private tornDown = false;
 
   private constructor(
     private readonly container: Docker.Container,
     private readonly network: Docker.Network,
-    private readonly input: NodeJS.WritableStream,
+    private readonly input: NodeJS.ReadWriteStream,
     private readonly credentialDir: string | undefined,
     runnerOutput: NodeJS.ReadableStream,
     runnerError: NodeJS.ReadableStream,
@@ -171,8 +176,26 @@ export class DockerEntrantContainer implements EntrantContainer {
 
     const outputLines = createInterface({ input: runnerOutput, crlfDelay: Infinity });
     outputLines.on('line', (line) => this.receive(line));
+    outputLines.once('close', () => {
+      this.scheduleTermination(new Error('Container attachment stream closed before runner exit'));
+    });
+    runnerOutput.once('error', (error) => {
+      this.scheduleTermination(new Error(`Container runner output failed: ${asError(error).message}`));
+    });
     const errorLines = createInterface({ input: runnerError, crlfDelay: Infinity });
     errorLines.on('line', (line) => console.warn(`[arena runner stderr] ${line}`));
+    runnerError.once('error', (error) => {
+      this.scheduleTermination(new Error(`Container runner error output failed: ${asError(error).message}`));
+    });
+    input.once('end', () => {
+      this.scheduleTermination(new Error('Container attachment stream ended before runner exit'));
+    });
+    input.once('close', () => {
+      this.scheduleTermination(new Error('Container attachment stream closed before runner exit'));
+    });
+    input.once('error', (error) => {
+      this.scheduleTermination(new Error(`Container attachment stream failed: ${asError(error).message}`));
+    });
   }
 
   static async create(options: ContainerOptions, docker = new Docker()): Promise<DockerEntrantContainer> {
@@ -237,7 +260,6 @@ export class DockerEntrantContainer implements EntrantContainer {
       });
       const runnerOutput = new PassThrough();
       const runnerError = new PassThrough();
-      container.modem.demuxStream(attachment, runnerOutput, runnerError);
       const runtime = new DockerEntrantContainer(
         container,
         network,
@@ -246,7 +268,10 @@ export class DockerEntrantContainer implements EntrantContainer {
         runnerOutput,
         runnerError,
       );
-      await container.start();
+      container.modem.demuxStream(attachment, runnerOutput, runnerError);
+      const start = container.start();
+      runtime.observeContainerDeath();
+      await start;
       await runtime.waitUntilReady(options.readyTimeoutMs ?? 15_000);
       return runtime;
     } catch (error) {
@@ -262,6 +287,7 @@ export class DockerEntrantContainer implements EntrantContainer {
 
   async exec(argv: string[], env?: Record<string, string>): Promise<RuntimeExecution> {
     if (this.tornDown) throw new Error('Container is already torn down');
+    if (this.terminalError !== undefined) throw this.terminalError;
     if (this.activeExecution !== undefined) {
       throw new Error(`Exec ${this.activeExecution.id} is still running`);
     }
@@ -293,6 +319,7 @@ export class DockerEntrantContainer implements EntrantContainer {
     }
     await ignoreDockerError(() => this.write({ cmd: 'shutdown' }));
     await ignoreDockerError(() => this.container.stop({ t: 3 }));
+    this.terminateExpectedly();
     await ignoreDockerError(() => this.container.remove({ force: true }));
     await ignoreDockerError(() => this.network.remove());
     if (this.credentialDir !== undefined) await removeCredentialTempDir(this.credentialDir);
@@ -339,6 +366,65 @@ export class DockerEntrantContainer implements EntrantContainer {
     if (this.activeExecution?.id === message.id) this.activeExecution = undefined;
   }
 
+  private observeContainerDeath(): void {
+    void this.container.wait().then(
+      (result: unknown) => {
+        this.observedExitCode = containerExitCode(result);
+        this.scheduleTermination(containerExitError(this.observedExitCode));
+      },
+      (error: unknown) => {
+        this.scheduleTermination(new Error(`Container wait failed: ${asError(error).message}`));
+      },
+    );
+  }
+
+  private scheduleTermination(error: Error): void {
+    if (this.terminalError !== undefined) return;
+    this.streamFailure ??= error;
+    if (this.terminationCheck !== undefined) return;
+
+    // Let readline drain any JSON exit event already buffered in the attachment.
+    // Docker's wait response and attachment closure can arrive in either order.
+    this.terminationCheck = setImmediate(() => {
+      this.terminationCheck = undefined;
+      if (this.terminalError !== undefined) return;
+      if (this.tornDown) {
+        this.terminateExpectedly();
+        return;
+      }
+      this.terminateUnexpectedly(
+        this.observedExitCode === undefined
+          ? this.streamFailure ?? error
+          : containerExitError(this.observedExitCode),
+      );
+    });
+  }
+
+  private terminateUnexpectedly(error: Error): void {
+    if (this.terminalError !== undefined) return;
+    this.terminalError = error;
+    this.rejectReady(error);
+    for (const execution of this.executions.values()) execution.fail(error);
+    this.executions.clear();
+    this.activeExecution = undefined;
+    this.rejectPendingWrites(error);
+  }
+
+  private terminateExpectedly(): void {
+    if (this.terminalError !== undefined) return;
+    const error = new Error('Container stopped during teardown');
+    this.terminalError = error;
+    this.resolveReady();
+    for (const execution of this.executions.values()) execution.finish(null);
+    this.executions.clear();
+    this.activeExecution = undefined;
+    this.rejectPendingWrites(error);
+  }
+
+  private rejectPendingWrites(error: Error): void {
+    for (const rejectWrite of [...this.pendingWriteRejectors]) rejectWrite(error);
+  }
+
   private async waitUntilReady(timeoutMs: number): Promise<void> {
     let timer: NodeJS.Timeout | undefined;
     try {
@@ -359,13 +445,28 @@ export class DockerEntrantContainer implements EntrantContainer {
     // "Malformed command JSON". Chaining keeps each command a whole line.
     const line = `${JSON.stringify(message)}\n`;
     const next = this.writeQueue.then(
-      () =>
-        new Promise<void>((resolveWrite, rejectWrite) => {
-          this.input.write(line, (error?: Error | null) => {
-            if (error === undefined || error === null) resolveWrite();
-            else rejectWrite(error);
-          });
-        }),
+      () => new Promise<void>((resolveWrite, rejectWrite) => {
+        if (this.terminalError !== undefined) {
+          rejectWrite(this.terminalError);
+          return;
+        }
+
+        let settled = false;
+        const finishWrite = (error?: Error | null): void => {
+          if (settled) return;
+          settled = true;
+          this.pendingWriteRejectors.delete(rejectOnTermination);
+          if (error === undefined || error === null) resolveWrite();
+          else rejectWrite(error);
+        };
+        const rejectOnTermination = (error: Error): void => finishWrite(error);
+        this.pendingWriteRejectors.add(rejectOnTermination);
+        try {
+          this.input.write(line, finishWrite);
+        } catch (error) {
+          finishWrite(asError(error));
+        }
+      }),
     );
     // Keep the queue alive if one write rejects, so a single failure can't wedge it.
     this.writeQueue = next.catch(() => undefined);
@@ -411,4 +512,20 @@ function safeDockerName(value: string): string {
 
 function asError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
+}
+
+function containerExitCode(result: unknown): number | null {
+  if (
+    typeof result === 'object'
+    && result !== null
+    && 'StatusCode' in result
+    && typeof result.StatusCode === 'number'
+  ) {
+    return result.StatusCode;
+  }
+  return null;
+}
+
+function containerExitError(code: number | null): Error {
+  return new Error(`Container exited with code ${code === null ? 'unknown' : String(code)}`);
 }
