@@ -150,6 +150,10 @@ describe('RunManager ready barrier', () => {
       expect(driver.prepares.sort()).toEqual(['codex-1', 'opencode-1']);
       expect(driver.stops).toEqual([]);
       expect(manager.snapshot(run.id).state).toBe('running');
+
+      await expect(manager.start(run.id)).rejects.toThrow(InvalidTransitionError);
+      expect(driver.stops).toEqual([]);
+      expect(manager.snapshot(run.id).state).toBe('running');
     } finally {
       journal.close();
     }

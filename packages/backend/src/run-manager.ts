@@ -190,10 +190,16 @@ export class RunManager {
     const existing = this.inFlightStarts.get(runId);
     if (existing !== undefined) return existing;
 
+    const run = this.requireRun(runId);
+    if (run.state !== 'created' && run.state !== 'ready') {
+      return Promise.reject(new InvalidTransitionError(`Cannot start run ${runId} from ${run.state}`));
+    }
+
     const controller = new AbortController();
     const starting = this.startOwned(runId, controller).finally(() => {
       if (this.inFlightStarts.get(runId) === starting) this.inFlightStarts.delete(runId);
       if (this.startControllers.get(runId) === controller) this.startControllers.delete(runId);
+      this.clearTeardownWhenSafe(runId);
     });
     this.inFlightStarts.set(runId, starting);
     this.startControllers.set(runId, controller);
@@ -283,6 +289,7 @@ export class RunManager {
       throw error;
     } finally {
       this.operatorStops.delete(runId);
+      this.clearTeardownWhenSafe(runId);
     }
   }
 
@@ -324,6 +331,11 @@ export class RunManager {
     );
     this.teardownPromises.set(runId, teardown);
     return teardown;
+  }
+
+  private clearTeardownWhenSafe(runId: string): void {
+    if (this.inFlightStarts.has(runId) || this.operatorStops.has(runId)) return;
+    this.teardownPromises.delete(runId);
   }
 
   private requireRun(runId: string): RunRecord {
