@@ -8,3 +8,6 @@ coverage/
 
 # forge build cache under test fixtures (the out/ artifacts are committed on purpose)
 packages/backend/test/chain/fixture/cache/
+
+# funding-drill scratch (wallet addresses handed to fund-drill.sh)
+packages/backend/scripts/.funding-request.json
