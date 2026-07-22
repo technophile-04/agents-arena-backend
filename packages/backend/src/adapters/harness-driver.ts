@@ -1,0 +1,339 @@
+import { and, eq } from 'drizzle-orm';
+
+import type { EntrantStatus } from '../contract.js';
+import { entrants } from '../db/schema.js';
+import type { EventJournal } from '../journal.js';
+import type {
+  ContainerFactory,
+  EntrantContainer,
+  RuntimeExecution,
+} from '../runtime/container.js';
+import { createDockerContainer } from '../runtime/container.js';
+import type { EntrantDriver, EntrantRecord, RunRecord } from './types.js';
+import type { ParsedArenaEvent, ParsedHarnessLine, ParserLogger } from './parser-types.js';
+
+export interface HarnessDriverOptions {
+  containerFactory?: ContainerFactory;
+  rpcUrl?: string;
+  logger?: ParserLogger;
+}
+
+interface EntrantRuntimeState {
+  run: RunRecord;
+  entrant: EntrantRecord;
+  container: EntrantContainer;
+  queuedSteers: string[];
+  running: boolean;
+  stopping: boolean;
+  degraded: boolean;
+  sessionId?: string;
+  active: RuntimeExecution | undefined;
+  turnTask: Promise<void> | undefined;
+}
+
+export abstract class HarnessEntrantDriver implements EntrantDriver {
+  protected readonly containerFactory: ContainerFactory;
+  protected readonly rpcUrl: string;
+  protected readonly logger: ParserLogger;
+  private readonly states = new Map<string, EntrantRuntimeState>();
+
+  protected constructor(
+    protected readonly journal: EventJournal,
+    options: HarnessDriverOptions = {},
+  ) {
+    this.containerFactory = options.containerFactory ?? createDockerContainer;
+    this.rpcUrl = options.rpcUrl ?? process.env.ARENA_RPC_URL ?? 'http://host.docker.internal:8545';
+    this.logger = options.logger ?? console;
+  }
+
+  async prepare(run: RunRecord, entrant: EntrantRecord): Promise<void> {
+    this.assertHarness(entrant);
+    const key = this.key(run.id, entrant.id);
+    if (this.states.has(key)) throw new Error(`Entrant ${entrant.id} is already prepared`);
+
+    const container = await this.createContainer(run, entrant);
+    const state: EntrantRuntimeState = {
+      run,
+      entrant,
+      container,
+      queuedSteers: [],
+      running: false,
+      stopping: false,
+      degraded: false,
+      active: undefined,
+      turnTask: undefined,
+    };
+    this.states.set(key, state);
+
+    try {
+      await this.preflight(container, ['forge', '--version'], 'forge');
+      await this.preflight(container, ['cast', 'chain-id', '--rpc-url', this.rpcUrl], 'cast chain-id');
+      await this.preflight(container, this.versionArgv(), this.harnessName());
+      this.setStatus(run.id, entrant.id, 'idle');
+    } catch (error) {
+      this.states.delete(key);
+      await container.teardown();
+      throw error;
+    }
+  }
+
+  async start(run: RunRecord, entrant: EntrantRecord, openingPrompt: string): Promise<void> {
+    this.assertHarness(entrant);
+    const state = this.requireState(run.id, entrant.id);
+    if (state.running) throw new Error(`Entrant ${entrant.id} already has a turn in flight`);
+    await this.beginTurn(state, openingPrompt, false);
+  }
+
+  async steer(run: RunRecord, entrant: EntrantRecord, text: string): Promise<void> {
+    this.assertHarness(entrant);
+    const state = this.requireState(run.id, entrant.id);
+    if (state.stopping) throw new Error(`Entrant ${entrant.id} is stopping`);
+    if (state.degraded) {
+      this.appendError(state, 'Steer rejected because the entrant is degraded');
+      return;
+    }
+
+    if (state.running) {
+      state.queuedSteers.push(text);
+      return;
+    }
+    await this.beginTurn(state, text, true);
+  }
+
+  async stop(run: RunRecord, entrant: EntrantRecord): Promise<void> {
+    this.assertHarness(entrant);
+    const key = this.key(run.id, entrant.id);
+    const state = this.states.get(key);
+    if (state === undefined) return;
+
+    state.stopping = true;
+    state.queuedSteers.splice(0);
+    if (state.active !== undefined) {
+      try {
+        await state.active.kill();
+      } catch {
+        // Teardown below stops the container if the runner is already gone.
+      }
+    }
+    await state.turnTask;
+    await state.container.teardown();
+    this.states.delete(key);
+    this.setStatus(run.id, entrant.id, 'done');
+  }
+
+  protected abstract harnessName(): string;
+  protected abstract assertHarness(entrant: EntrantRecord): void;
+  protected abstract createContainer(run: RunRecord, entrant: EntrantRecord): Promise<EntrantContainer>;
+  protected abstract versionArgv(): string[];
+  protected abstract startArgv(entrant: EntrantRecord, prompt: string): string[];
+  protected abstract resumeArgv(entrant: EntrantRecord, sessionId: string, text: string): string[];
+  protected abstract parseLine(entrantId: string, line: string): ParsedHarnessLine;
+
+  protected watchdogMs(): number | undefined {
+    return undefined;
+  }
+
+  protected validateResumeSession(): boolean {
+    return false;
+  }
+
+  private async beginTurn(state: EntrantRuntimeState, text: string, resume: boolean): Promise<void> {
+    if (state.running) throw new Error(`Entrant ${state.entrant.id} already has a turn in flight`);
+    if (resume && state.sessionId === undefined) {
+      this.markDegraded(state, 'Cannot steer before the harness reports a session ID');
+      return;
+    }
+
+    state.running = true;
+    this.setStatus(state.run.id, state.entrant.id, 'working');
+
+    let resolveInjected!: () => void;
+    let rejectInjected!: (error: Error) => void;
+    const injected = new Promise<void>((resolve, reject) => {
+      resolveInjected = resolve;
+      rejectInjected = reject;
+    });
+    state.turnTask = this.runTurn(state, text, resume, resolveInjected, rejectInjected);
+    await injected;
+  }
+
+  private async runTurn(
+    state: EntrantRuntimeState,
+    text: string,
+    resume: boolean,
+    resolveInjected: () => void,
+    rejectInjected: (error: Error) => void,
+  ): Promise<void> {
+    const expectedSessionId = resume ? state.sessionId : undefined;
+    const argv = resume
+      ? this.resumeArgv(state.entrant, expectedSessionId as string, text)
+      : this.startArgv(state.entrant, text);
+    let sawTurnEnd = false;
+    let sawSession = false;
+    let watchdogFired = false;
+    let launchFailed = false;
+    let timer: NodeJS.Timeout | undefined;
+    const stderrTail: string[] = [];
+
+    try {
+      const execution = await state.container.exec(argv, this.execEnvironment());
+      state.active = execution;
+      if (resume) {
+        this.journal.append(state.run.id, state.entrant.id, 'entrant.steered', {
+          entrantId: state.entrant.id,
+          text,
+        });
+      }
+      resolveInjected();
+
+      const timeoutMs = this.watchdogMs();
+      if (timeoutMs !== undefined) {
+        timer = setTimeout(() => {
+          watchdogFired = true;
+          this.appendError(state, `Turn exceeded the ${timeoutMs}ms watchdog; killed its process group`);
+          void execution.kill().catch((error: unknown) => {
+            this.logger.warn(`[${this.harnessName()}] watchdog kill failed: ${errorMessage(error)}`);
+          });
+        }, timeoutMs);
+        timer.unref();
+      }
+
+      for await (const output of execution) {
+        if (output.stream === 'err') {
+          stderrTail.push(output.line);
+          if (stderrTail.length > 8) stderrTail.shift();
+          continue;
+        }
+
+        const parsed = this.parseLine(state.entrant.id, output.line);
+        for (const event of parsed.events) this.appendParsed(state.run.id, state.entrant.id, event);
+        if (parsed.turnEnded === true) {
+          sawTurnEnd = true;
+          // Disarm the watchdog once the turn actually ends. A slow process close
+          // after a real turn-end must not trip a false "exceeded watchdog" kill.
+          if (timer !== undefined) {
+            clearTimeout(timer);
+            timer = undefined;
+          }
+        }
+        if (parsed.sessionId !== undefined) {
+          sawSession = true;
+          if (expectedSessionId !== undefined && this.validateResumeSession() &&
+              parsed.sessionId !== expectedSessionId) {
+            this.markDegraded(
+              state,
+              `Resume returned thread ${parsed.sessionId}; expected ${expectedSessionId}`,
+            );
+            await execution.kill();
+          } else if (state.sessionId === undefined) {
+            state.sessionId = parsed.sessionId;
+          }
+        }
+      }
+
+      const code = await execution.exit;
+      if (resume && this.validateResumeSession() && !sawSession && !state.degraded) {
+        this.markDegraded(state, `Resume for thread ${expectedSessionId as string} returned no thread ID`);
+      }
+      if (!sawTurnEnd && !watchdogFired) {
+        this.appendError(state, 'Harness exited before a turn-end event; synthesized turn end');
+      }
+      if (code !== 0 && !watchdogFired && !state.degraded) {
+        const detail = stderrTail.length === 0 ? '' : `: ${stderrTail.join('\n')}`;
+        this.appendError(state, `Harness exited with code ${String(code)}${detail}`);
+      }
+    } catch (error) {
+      launchFailed = state.active === undefined;
+      const normalized = error instanceof Error ? error : new Error(String(error));
+      this.appendError(state, `Harness turn failed: ${normalized.message}`);
+      if (launchFailed) rejectInjected(normalized);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+      state.active = undefined;
+      if (!launchFailed) resolveInjected();
+      this.finishTurn(state);
+    }
+  }
+
+  private finishTurn(state: EntrantRuntimeState): void {
+    state.running = false;
+    if (state.stopping) return;
+    this.setStatus(state.run.id, state.entrant.id, state.degraded ? 'blocked' : 'idle');
+    if (state.degraded) {
+      state.queuedSteers.splice(0);
+      return;
+    }
+
+    const next = state.queuedSteers.shift();
+    if (next !== undefined) {
+      void this.beginTurn(state, next, true).catch((error: unknown) => {
+        this.logger.warn(`[${this.harnessName()}] queued steer failed: ${errorMessage(error)}`);
+      });
+    }
+  }
+
+  private async preflight(container: EntrantContainer, argv: string[], name: string): Promise<void> {
+    const execution = await container.exec(argv);
+    const output: string[] = [];
+    for await (const line of execution) output.push(line.line);
+    const code = await execution.exit;
+    if (code !== 0) {
+      throw new Error(`${name} preflight failed with code ${String(code)}: ${output.join('\n')}`);
+    }
+  }
+
+  private appendParsed(runId: string, entrantId: string, event: ParsedArenaEvent): void {
+    switch (event.type) {
+      case 'agent.message': this.journal.append(runId, entrantId, event.type, event.payload); break;
+      case 'agent.reasoning': this.journal.append(runId, entrantId, event.type, event.payload); break;
+      case 'tool.call': this.journal.append(runId, entrantId, event.type, event.payload); break;
+      case 'tool.result': this.journal.append(runId, entrantId, event.type, event.payload); break;
+      case 'entrant.error': this.journal.append(runId, entrantId, event.type, event.payload); break;
+      case 'usage': this.journal.append(runId, entrantId, event.type, event.payload); break;
+      default: this.logger.warn(`[${this.harnessName()}] parser returned unsupported event ${event.type}`);
+    }
+  }
+
+  private appendError(state: EntrantRuntimeState, message: string): void {
+    this.journal.append(state.run.id, state.entrant.id, 'entrant.error', {
+      entrantId: state.entrant.id,
+      message,
+    });
+  }
+
+  private markDegraded(state: EntrantRuntimeState, message: string): void {
+    if (state.degraded) return;
+    state.degraded = true;
+    this.appendError(state, message);
+  }
+
+  private setStatus(runId: string, entrantId: string, status: EntrantStatus): void {
+    this.journal.database
+      .update(entrants)
+      .set({ status })
+      .where(and(eq(entrants.runId, runId), eq(entrants.id, entrantId)))
+      .run();
+    this.journal.append(runId, entrantId, 'entrant.status', { entrantId, status });
+  }
+
+  private requireState(runId: string, entrantId: string): EntrantRuntimeState {
+    const state = this.states.get(this.key(runId, entrantId));
+    if (state === undefined) throw new Error(`Entrant ${entrantId} is not prepared`);
+    return state;
+  }
+
+  private key(runId: string, entrantId: string): string {
+    return `${runId}:${entrantId}`;
+  }
+
+  private execEnvironment(): Record<string, string> {
+    const environment: Record<string, string> = {};
+    delete environment.OPENCODE_SERVER_PASSWORD;
+    delete environment.OPENCODE_PORT;
+    return environment;
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}

@@ -2,7 +2,8 @@ import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import { z } from 'zod';
 
 import type { ArenaEvent, CreateRunRequest } from './contract.js';
-import { FakeDriver, type Schedule } from './adapters/fake.js';
+import type { Schedule } from './adapters/fake.js';
+import { RegisteredEntrantDriver } from './adapters/registered.js';
 import type { EntrantDriver } from './adapters/types.js';
 import { EventJournal } from './journal.js';
 import {
@@ -38,7 +39,7 @@ export interface ArenaServer {
 export function createServer(options: ServerOptions = {}): ArenaServer {
   const app = Fastify({ logger: options.logger ?? false });
   const journal = new EventJournal(options.dbPath);
-  const driver = options.driverFactory?.(journal) ?? new FakeDriver(journal, options.schedule);
+  const driver = options.driverFactory?.(journal) ?? new RegisteredEntrantDriver(journal, options.schedule);
   const manager = new RunManager(journal, driver);
 
   app.setErrorHandler((error, _request, reply) => {

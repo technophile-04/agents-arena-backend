@@ -2,7 +2,13 @@ import { randomUUID } from 'node:crypto';
 
 import { and, asc, count, eq, max } from 'drizzle-orm';
 
-import type { CreateRunRequest, EntrantSummary, RunSnapshot, RunState } from './contract.js';
+import type {
+  CreateRunRequest,
+  EntrantSummary,
+  HarnessId,
+  RunSnapshot,
+  RunState,
+} from './contract.js';
 import { entrants, events, runs } from './db/schema.js';
 import type { EventJournal } from './journal.js';
 import type { EntrantDriver, EntrantRecord, RunRecord } from './adapters/types.js';
@@ -28,10 +34,41 @@ export interface CreateRunResult {
   created: boolean;
 }
 
+interface PresetEntrant {
+  id: string;
+  harness: HarnessId;
+  model: string;
+  openingPrompt: string;
+}
+
+const OPENING_PROMPT = 'Solve the arena challenge and capture every flag.';
+
+const PRESETS: Readonly<Record<string, readonly PresetEntrant[]>> = {
+  'fake-duel': [
+    { id: 'codex-1', harness: 'codex', model: 'gpt-5-codex', openingPrompt: OPENING_PROMPT },
+    { id: 'opencode-1', harness: 'opencode', model: 'opencode-fake-1', openingPrompt: OPENING_PROMPT },
+  ],
+  'docker-duel': [
+    { id: 'codex-1', harness: 'codex', model: 'gpt-5-codex', openingPrompt: OPENING_PROMPT },
+    {
+      id: 'opencode-1',
+      harness: 'opencode',
+      model: 'openrouter/deepseek/deepseek-chat',
+      openingPrompt: OPENING_PROMPT,
+    },
+  ],
+};
+
+export type FundingGate = (run: RunRecord, entrants: readonly EntrantRecord[]) => Promise<void>;
+
+// The chain funding slice replaces this pass-through hook with the real gate.
+export const passThroughFundingGate: FundingGate = async () => {};
+
 export class RunManager {
   constructor(
     private readonly journal: EventJournal,
     private readonly driver: EntrantDriver,
+    private readonly fundingGate: FundingGate = passThroughFundingGate,
   ) {}
 
   async create(input: CreateRunRequest): Promise<CreateRunResult> {
@@ -46,7 +83,8 @@ export class RunManager {
       }
     }
 
-    if (input.preset !== 'fake-duel') {
+    const preset = PRESETS[input.preset];
+    if (preset === undefined) {
       throw new UnknownPresetError(`Unknown preset: ${input.preset}`);
     }
 
@@ -62,26 +100,15 @@ export class RunManager {
         idempotencyKey: input.idempotencyKey ?? null,
         createdAt: now,
       }).run();
-      transaction.insert(entrants).values([
-        {
+      transaction.insert(entrants).values(preset.map((entrant) => ({
           runId: id,
-          id: 'codex-1',
-          harness: 'codex',
-          model: 'gpt-5-codex',
+          id: entrant.id,
+          harness: entrant.harness,
+          model: entrant.model,
           address: null,
-          status: 'idle',
+          status: 'idle' as const,
           flags: 0,
-        },
-        {
-          runId: id,
-          id: 'opencode-1',
-          harness: 'opencode',
-          model: 'opencode-fake-1',
-          address: null,
-          status: 'idle',
-          flags: 0,
-        },
-      ]).run();
+      }))).run();
     });
     this.journal.append(id, 'run', 'run.state', { state: 'created' });
 
@@ -137,13 +164,21 @@ export class RunManager {
 
   async start(runId: string): Promise<RunSnapshot> {
     let run = this.requireRun(runId);
+    const runEntrants = this.entrants(runId);
     try {
       if (run.state === 'created') {
         run = this.transition(runId, 'preparing');
-        for (const entrant of this.entrants(runId)) {
-          await this.driver.prepare(run, entrant);
+        const prepareResults = await Promise.allSettled(
+          runEntrants.map((entrant) => this.driver.prepare(run, entrant)),
+        );
+        const prepareFailure = prepareResults.find(
+          (result): result is PromiseRejectedResult => result.status === 'rejected',
+        );
+        if (prepareFailure !== undefined) {
+          throw prepareFailure.reason;
         }
         run = this.transition(runId, 'awaiting_funding');
+        await this.fundingGate(run, runEntrants);
         run = this.transition(runId, 'ready');
       }
       if (run.state !== 'ready') {
@@ -151,15 +186,20 @@ export class RunManager {
       }
 
       run = this.transition(runId, 'running');
-      for (const entrant of this.entrants(runId)) {
-        await this.driver.start(run, entrant, 'Solve the arena challenge and capture every flag.');
-      }
+      const preset = PRESETS[run.preset];
+      if (preset === undefined) throw new UnknownPresetError(`Unknown preset: ${run.preset}`);
+      await Promise.all(runEntrants.map(async (entrant) => {
+        const entrantPreset = preset.find((candidate) => candidate.id === entrant.id);
+        if (entrantPreset === undefined) throw new Error(`Preset has no entrant ${entrant.id}`);
+        await this.driver.start(run, entrant, entrantPreset.openingPrompt);
+      }));
       return this.snapshot(runId);
     } catch (error) {
       const current = this.requireRun(runId);
       if (current.state !== 'failed' && current.state !== 'finished') {
         this.transition(runId, 'failed', error instanceof Error ? error.message : String(error));
       }
+      await Promise.allSettled(runEntrants.map((entrant) => this.driver.stop(current, entrant)));
       throw error;
     }
   }
