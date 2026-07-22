@@ -59,17 +59,41 @@ const PRESETS: Readonly<Record<string, readonly PresetEntrant[]>> = {
   ],
 };
 
-export type FundingGate = (run: RunRecord, entrants: readonly EntrantRecord[]) => Promise<void>;
+export type FundingGate = (
+  run: RunRecord,
+  entrants: readonly EntrantRecord[],
+  signal?: AbortSignal,
+) => Promise<void>;
+
+export interface RunManagerOptions {
+  prepareTimeoutMs?: number;
+  fundingTimeoutMs?: number;
+}
+
+const DEFAULT_PREPARE_TIMEOUT_MS = 300_000;
+const DEFAULT_FUNDING_TIMEOUT_MS = 900_000;
+const OPERATOR_STOP_REASON = 'stopped by operator before running';
 
 // The chain funding slice replaces this pass-through hook with the real gate.
 export const passThroughFundingGate: FundingGate = async () => {};
 
 export class RunManager {
+  private readonly inFlightStarts = new Map<string, Promise<RunSnapshot>>();
+  private readonly startControllers = new Map<string, AbortController>();
+  private readonly operatorStops = new Set<string>();
+  private readonly teardownPromises = new Map<string, Promise<PromiseSettledResult<void>[]>>();
+  private readonly prepareTimeoutMs: number;
+  private readonly fundingTimeoutMs: number;
+
   constructor(
     private readonly journal: EventJournal,
     private readonly driver: EntrantDriver,
     private readonly fundingGate: FundingGate = passThroughFundingGate,
-  ) {}
+    options: RunManagerOptions = {},
+  ) {
+    this.prepareTimeoutMs = options.prepareTimeoutMs ?? DEFAULT_PREPARE_TIMEOUT_MS;
+    this.fundingTimeoutMs = options.fundingTimeoutMs ?? DEFAULT_FUNDING_TIMEOUT_MS;
+  }
 
   async create(input: CreateRunRequest): Promise<CreateRunResult> {
     if (input.idempotencyKey !== undefined) {
@@ -162,14 +186,31 @@ export class RunManager {
     return this.requireRun(runId);
   }
 
-  async start(runId: string): Promise<RunSnapshot> {
+  start(runId: string): Promise<RunSnapshot> {
+    const existing = this.inFlightStarts.get(runId);
+    if (existing !== undefined) return existing;
+
+    const controller = new AbortController();
+    const starting = this.startOwned(runId, controller).finally(() => {
+      if (this.inFlightStarts.get(runId) === starting) this.inFlightStarts.delete(runId);
+      if (this.startControllers.get(runId) === controller) this.startControllers.delete(runId);
+    });
+    this.inFlightStarts.set(runId, starting);
+    this.startControllers.set(runId, controller);
+    return starting;
+  }
+
+  private async startOwned(runId: string, controller: AbortController): Promise<RunSnapshot> {
     let run = this.requireRun(runId);
     const runEntrants = this.entrants(runId);
     try {
       if (run.state === 'created') {
         run = this.transition(runId, 'preparing');
-        const prepareResults = await Promise.allSettled(
-          runEntrants.map((entrant) => this.driver.prepare(run, entrant)),
+        const prepareResults = await withPhaseTimeout(
+          Promise.allSettled(runEntrants.map((entrant) => this.driver.prepare(run, entrant))),
+          this.prepareTimeoutMs,
+          'prepare',
+          controller,
         );
         const prepareFailure = prepareResults.find(
           (result): result is PromiseRejectedResult => result.status === 'rejected',
@@ -178,7 +219,12 @@ export class RunManager {
           throw prepareFailure.reason;
         }
         run = this.transition(runId, 'awaiting_funding');
-        await this.fundingGate(run, runEntrants);
+        await withPhaseTimeout(
+          this.fundingGate(run, runEntrants, controller.signal),
+          this.fundingTimeoutMs,
+          'funding',
+          controller,
+        );
         run = this.transition(runId, 'ready');
       }
       if (run.state !== 'ready') {
@@ -195,33 +241,48 @@ export class RunManager {
       }));
       return this.snapshot(runId);
     } catch (error) {
-      const current = this.requireRun(runId);
-      if (current.state !== 'failed' && current.state !== 'finished') {
-        this.transition(runId, 'failed', error instanceof Error ? error.message : String(error));
+      if (!controller.signal.aborted) controller.abort(asError(error));
+      let current = this.requireRun(runId);
+      if (!this.operatorStops.has(runId) && current.state !== 'failed' && current.state !== 'finished') {
+        current = this.transition(runId, 'failed', errorMessage(error));
       }
-      await Promise.allSettled(runEntrants.map((entrant) => this.driver.stop(current, entrant)));
+      await this.teardownEntrants(runId, current, runEntrants);
       throw error;
     }
   }
 
   async stop(runId: string): Promise<RunSnapshot> {
     let run = this.requireRun(runId);
-    if (run.state !== 'running') {
+    if (!(['preparing', 'awaiting_funding', 'ready', 'running'] as RunState[]).includes(run.state)) {
       throw new InvalidTransitionError(`Cannot stop run ${runId} from ${run.state}`);
     }
+
+    const runEntrants = this.entrants(runId);
+    this.operatorStops.add(runId);
     try {
-      run = this.transition(runId, 'stopping');
-      for (const entrant of this.entrants(runId)) {
-        await this.driver.stop(run, entrant);
+      if (run.state !== 'running') {
+        this.startControllers.get(runId)?.abort(new Error(OPERATOR_STOP_REASON));
+        run = this.transition(runId, 'failed', OPERATOR_STOP_REASON);
+        const stopResults = await this.teardownEntrants(runId, run, runEntrants);
+        const stopError = aggregateStopErrors(stopResults);
+        if (stopError !== undefined) throw stopError;
+        return this.snapshot(runId);
       }
+
+      run = this.transition(runId, 'stopping');
+      const stopResults = await this.teardownEntrants(runId, run, runEntrants);
+      const stopError = aggregateStopErrors(stopResults);
+      if (stopError !== undefined) throw stopError;
       this.transition(runId, 'finished');
       return this.snapshot(runId);
     } catch (error) {
       const current = this.requireRun(runId);
       if (current.state !== 'failed' && current.state !== 'finished') {
-        this.transition(runId, 'failed', error instanceof Error ? error.message : String(error));
+        this.transition(runId, 'failed', errorMessage(error));
       }
       throw error;
+    } finally {
+      this.operatorStops.delete(runId);
     }
   }
 
@@ -250,6 +311,21 @@ export class RunManager {
     return this.journal.database.select({ value: count() }).from(runs).get()?.value ?? 0;
   }
 
+  private teardownEntrants(
+    runId: string,
+    run: RunRecord,
+    runEntrants: readonly EntrantRecord[],
+  ): Promise<PromiseSettledResult<void>[]> {
+    const existing = this.teardownPromises.get(runId);
+    if (existing !== undefined) return existing;
+
+    const teardown = Promise.allSettled(
+      runEntrants.map((entrant) => this.driver.stop(run, entrant)),
+    );
+    this.teardownPromises.set(runId, teardown);
+    return teardown;
+  }
+
   private requireRun(runId: string): RunRecord {
     const run = this.journal.database.select().from(runs).where(eq(runs.id, runId)).get();
     if (run === undefined) {
@@ -266,4 +342,60 @@ export class RunManager {
       .orderBy(asc(entrants.id))
       .all();
   }
+}
+
+function withPhaseTimeout<T>(
+  action: Promise<T>,
+  timeoutMs: number,
+  phase: 'prepare' | 'funding',
+  controller: AbortController,
+): Promise<T> {
+  const { signal } = controller;
+  if (signal.aborted) return Promise.reject(abortReason(signal));
+
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const cleanup = (): void => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', onAbort);
+    };
+    const resolveOnce = (value: T): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(value);
+    };
+    const rejectOnce = (error: unknown): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+    const onAbort = (): void => rejectOnce(abortReason(signal));
+    const timer = setTimeout(() => {
+      controller.abort(new Error(`${phase} phase timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    timer.unref();
+    signal.addEventListener('abort', onAbort, { once: true });
+    action.then(resolveOnce, rejectOnce);
+  });
+}
+
+function abortReason(signal: AbortSignal): Error {
+  return asError(signal.reason ?? 'Start aborted');
+}
+
+function aggregateStopErrors(results: readonly PromiseSettledResult<void>[]): AggregateError | undefined {
+  const errors = results.flatMap((result) => result.status === 'rejected' ? [result.reason] : []);
+  if (errors.length === 0) return undefined;
+  const suffix = errors.length === 1 ? '' : 's';
+  return new AggregateError(errors, `Failed to stop ${errors.length} entrant${suffix}`);
+}
+
+function asError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

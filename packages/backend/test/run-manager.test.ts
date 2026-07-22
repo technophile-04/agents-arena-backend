@@ -100,10 +100,12 @@ interface Deferred {
 
 class BarrierDriver implements EntrantDriver {
   readonly prepareControls = new Map<string, Deferred>();
+  readonly prepares: string[] = [];
   readonly starts: Array<{ entrantId: string; startedAt: string | null }> = [];
   readonly stops: string[] = [];
 
   async prepare(_run: Parameters<EntrantDriver['prepare']>[0], entrant: Parameters<EntrantDriver['prepare']>[1]) {
+    this.prepares.push(entrant.id);
     await new Promise<void>((resolve, reject) => {
       this.prepareControls.set(entrant.id, { resolve: () => resolve(), reject });
     });
@@ -129,6 +131,30 @@ async function waitFor(check: () => boolean): Promise<void> {
 }
 
 describe('RunManager ready barrier', () => {
+  it('shares one in-flight start between concurrent callers', async () => {
+    const journal = new EventJournal(':memory:');
+    const driver = new BarrierDriver();
+    const manager = new RunManager(journal, driver);
+    try {
+      const { run } = await manager.create({ preset: 'docker-duel' });
+      const first = manager.start(run.id);
+      const second = manager.start(run.id);
+
+      expect(second).toBe(first);
+      await waitFor(() => driver.prepareControls.size === 2);
+      driver.prepareControls.get('codex-1')?.resolve();
+      driver.prepareControls.get('opencode-1')?.resolve();
+
+      const [firstResult, secondResult] = await Promise.all([first, second]);
+      expect(secondResult).toEqual(firstResult);
+      expect(driver.prepares.sort()).toEqual(['codex-1', 'opencode-1']);
+      expect(driver.stops).toEqual([]);
+      expect(manager.snapshot(run.id).state).toBe('running');
+    } finally {
+      journal.close();
+    }
+  });
+
   it('waits for both entrants and gives them one recorded start time', async () => {
     const journal = new EventJournal(':memory:');
     const driver = new BarrierDriver();
@@ -173,6 +199,99 @@ describe('RunManager ready barrier', () => {
       if (!result.ok) expect(result.error).toEqual(new Error('codex preflight failed'));
       expect(driver.starts).toEqual([]);
       expect(driver.stops.sort()).toEqual(['codex-1', 'opencode-1']);
+      expect(manager.snapshot(run.id).state).toBe('failed');
+    } finally {
+      journal.close();
+    }
+  });
+});
+
+describe('RunManager lifecycle cancellation', () => {
+  it('stops a run while preparation is stuck', async () => {
+    const journal = new EventJournal(':memory:');
+    const driver = new BarrierDriver();
+    const manager = new RunManager(journal, driver);
+    try {
+      const { run } = await manager.create({ preset: 'docker-duel' });
+      const startOutcome = manager.start(run.id).then(
+        () => ({ ok: true as const }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
+      await waitFor(() => driver.prepareControls.size === 2);
+
+      const stopped = await manager.stop(run.id);
+      const startResult = await startOutcome;
+
+      expect(stopped.state).toBe('failed');
+      expect(startResult.ok).toBe(false);
+      if (!startResult.ok) {
+        expect(startResult.error).toEqual(new Error('stopped by operator before running'));
+      }
+      expect(driver.stops.sort()).toEqual(['codex-1', 'opencode-1']);
+      const stateEvents = journal.after(run.id, 0).filter((event) => event.type === 'run.state');
+      expect(stateEvents.at(-1)?.payload).toEqual({
+        state: 'failed',
+        reason: 'stopped by operator before running',
+      });
+    } finally {
+      journal.close();
+    }
+  });
+
+  it('fails and tears down a run when preparation times out', async () => {
+    const journal = new EventJournal(':memory:');
+    const driver = new BarrierDriver();
+    const manager = new RunManager(journal, driver, undefined, { prepareTimeoutMs: 10 });
+    try {
+      const { run } = await manager.create({ preset: 'docker-duel' });
+      const outcome = await manager.start(run.id).then(
+        () => ({ ok: true as const }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
+
+      expect(outcome.ok).toBe(false);
+      if (!outcome.ok) expect(outcome.error).toEqual(new Error('prepare phase timed out after 10ms'));
+      expect(manager.snapshot(run.id).state).toBe('failed');
+      expect(driver.stops.sort()).toEqual(['codex-1', 'opencode-1']);
+      const stateEvents = journal.after(run.id, 0).filter((event) => event.type === 'run.state');
+      expect(stateEvents.at(-1)?.payload).toEqual({
+        state: 'failed',
+        reason: 'prepare phase timed out after 10ms',
+      });
+    } finally {
+      journal.close();
+    }
+  });
+
+  it('attempts every running entrant stop before reporting failures', async () => {
+    const journal = new EventJournal(':memory:');
+    const stopError = new Error('codex teardown failed');
+    const stops: string[] = [];
+    const driver: EntrantDriver = {
+      async prepare() {},
+      async start() {},
+      async steer() {},
+      async stop(_run, entrant) {
+        stops.push(entrant.id);
+        if (entrant.id === 'codex-1') throw stopError;
+      },
+    };
+    const manager = new RunManager(journal, driver);
+    try {
+      const { run } = await manager.create({ preset: 'docker-duel' });
+      await manager.start(run.id);
+
+      const outcome = await manager.stop(run.id).then(
+        () => ({ ok: true as const }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
+
+      expect(outcome.ok).toBe(false);
+      if (!outcome.ok) {
+        expect(outcome.error).toBeInstanceOf(AggregateError);
+        expect((outcome.error as AggregateError).errors).toEqual([stopError]);
+      }
+      expect(stops).toEqual(['codex-1', 'opencode-1']);
       expect(manager.snapshot(run.id).state).toBe('failed');
     } finally {
       journal.close();
