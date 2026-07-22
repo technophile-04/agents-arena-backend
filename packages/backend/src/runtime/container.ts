@@ -367,7 +367,10 @@ export class DockerEntrantContainer implements EntrantContainer {
   }
 
   private observeContainerDeath(): void {
-    void this.container.wait().then(
+    // Registered before container.start(). The default wait condition
+    // (not-running) resolves immediately for a created container, which read
+    // as a phantom exit-0 death — next-exit waits for a real exit instead.
+    void this.container.wait({ condition: 'next-exit' }).then(
       (result: unknown) => {
         this.observedExitCode = containerExitCode(result);
         this.scheduleTermination(containerExitError(this.observedExitCode));
