@@ -65,4 +65,42 @@ export const events = sqliteTable('events', {
   index('events_run_id_id').on(table.runId, table.id),
 ]);
 
-export const schema = { events, runs, entrants };
+export const wallets = sqliteTable('wallets', {
+  runId: text('run_id').notNull(),
+  entrantId: text('entrant_id').notNull(),
+  address: text('address').notNull(),
+  privateKey: text('private_key').notNull(),
+}, (table) => [
+  uniqueIndex('wallets_run_id_entrant_id').on(table.runId, table.entrantId),
+]);
+
+export const scores = sqliteTable('scores', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  runId: text('run_id').notNull(),
+  entrantId: text('entrant_id').notNull(),
+  entrantAddress: text('entrant_address').notNull(),
+  challengeId: integer('challenge_id').notNull(),
+  tokenId: text('token_id').notNull(),
+  txHash: text('tx_hash').notNull(),
+  blockNumber: integer('block_number').notNull(),
+}, (table) => [
+  uniqueIndex('scores_run_id_address_challenge_id').on(
+    table.runId,
+    table.entrantAddress,
+    table.challengeId,
+  ),
+  index('scores_run_id_entrant_id').on(table.runId, table.entrantId),
+]);
+
+export const chainCursors = sqliteTable('chain_cursors', {
+  runId: text('run_id').notNull(),
+  contractAddress: text('contract_address').notNull(),
+  lastProcessedBlock: integer('last_processed_block').notNull(),
+}, (table) => [
+  uniqueIndex('chain_cursors_run_id_contract_address').on(
+    table.runId,
+    table.contractAddress,
+  ),
+]);
+
+export const schema = { events, runs, entrants, wallets, scores, chainCursors };

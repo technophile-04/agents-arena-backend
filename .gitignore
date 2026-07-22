@@ -5,3 +5,6 @@ coverage/
 *.db-shm
 *.db-wal
 .DS_Store
+
+# forge build cache under test fixtures (the out/ artifacts are committed on purpose)
+packages/backend/test/chain/fixture/cache/
