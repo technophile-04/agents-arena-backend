@@ -38,9 +38,13 @@ export class CodexDriver extends HarnessEntrantDriver {
     const credentialDir = await createCredentialDir('codex');
     try {
       await copyFile(this.authPath, join(credentialDir, 'auth.json'));
+      // Only pin a model when the preset asks for a specific one. A ChatGPT-account
+      // login rejects API-only models (gpt-5, gpt-5-codex) with a 400, so 'default'
+      // (or empty) leaves codex on the account's own default model.
+      const pinsModel = entrant.model !== '' && entrant.model.toLowerCase() !== 'default';
       await writeFile(
         join(credentialDir, 'config.toml'),
-        `model = ${tomlString(entrant.model)}\n`,
+        pinsModel ? `model = ${tomlString(entrant.model)}\n` : '',
         { mode: 0o644 },
       );
       return await this.containerFactory({

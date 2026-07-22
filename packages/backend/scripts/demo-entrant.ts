@@ -18,7 +18,7 @@ const runId = randomUUID();
 const entrantId = `${harness}-demo`;
 const now = new Date().toISOString();
 const model = harness === 'codex'
-  ? 'gpt-5-codex'
+  ? 'default' // ChatGPT-account login: use the account default, don't pin an API-only model
   : 'openrouter/deepseek/deepseek-chat';
 const run: RunRecord = {
   id: runId,

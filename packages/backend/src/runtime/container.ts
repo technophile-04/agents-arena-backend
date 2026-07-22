@@ -146,6 +146,7 @@ class DockerRuntimeExecution implements RuntimeExecution {
 export class DockerEntrantContainer implements EntrantContainer {
   private readonly executions = new Map<string, DockerRuntimeExecution>();
   private activeExecution: DockerRuntimeExecution | undefined;
+  private writeQueue: Promise<void> = Promise.resolve();
   private readonly ready: Promise<void>;
   private resolveReady!: () => void;
   private rejectReady!: (error: Error) => void;
@@ -163,6 +164,10 @@ export class DockerEntrantContainer implements EntrantContainer {
       this.resolveReady = resolveReady;
       this.rejectReady = rejectReady;
     });
+    // Guard consumer: once waitUntilReady has settled, a later runner ev:error
+    // still calls rejectReady. Without a handler that becomes an unhandled
+    // rejection and crashes the process; real awaiters still see the throw.
+    void this.ready.catch(() => undefined);
 
     const outputLines = createInterface({ input: runnerOutput, crlfDelay: Infinity });
     outputLines.on('line', (line) => this.receive(line));
@@ -348,14 +353,23 @@ export class DockerEntrantContainer implements EntrantContainer {
     }
   }
 
-  private async write(message: object): Promise<void> {
+  private write(message: object): Promise<void> {
+    // Serialize writes: two commands writing concurrently can interleave their
+    // bytes on the runner's stdin, which the runner then rejects as
+    // "Malformed command JSON". Chaining keeps each command a whole line.
     const line = `${JSON.stringify(message)}\n`;
-    await new Promise<void>((resolveWrite, rejectWrite) => {
-      this.input.write(line, (error?: Error | null) => {
-        if (error === undefined || error === null) resolveWrite();
-        else rejectWrite(error);
-      });
-    });
+    const next = this.writeQueue.then(
+      () =>
+        new Promise<void>((resolveWrite, rejectWrite) => {
+          this.input.write(line, (error?: Error | null) => {
+            if (error === undefined || error === null) resolveWrite();
+            else rejectWrite(error);
+          });
+        }),
+    );
+    // Keep the queue alive if one write rejects, so a single failure can't wedge it.
+    this.writeQueue = next.catch(() => undefined);
+    return next;
   }
 }
 
