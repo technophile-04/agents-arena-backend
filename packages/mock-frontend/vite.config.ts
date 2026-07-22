@@ -8,4 +8,9 @@ export default defineConfig({
       '/runs': 'http://localhost:4177',
     },
   },
+  preview: {
+    proxy: {
+      '/runs': 'http://localhost:4177',
+    },
+  },
 });

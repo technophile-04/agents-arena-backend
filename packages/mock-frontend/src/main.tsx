@@ -4,15 +4,23 @@ import { QueryClient, QueryClientProvider, useMutation, useQuery, useQueryClient
 
 import type { ArenaEvent, EntrantSummary, RunSnapshot } from '../../../contract/arena-types';
 import { projectSnapshot } from './project-snapshot';
+import {
+  describeEvent,
+  eventsForSource,
+  gapsForSource,
+  ingestEvent,
+  initialFeedState,
+  RUN_SOURCE,
+  type FeedState,
+} from './feed-projection';
 
 const queryClient = new QueryClient();
 
 function App() {
   const cache = useQueryClient();
   const [runId, setRunId] = useState<string | null>(null);
-  const [events, setEvents] = useState<ArenaEvent[]>([]);
+  const [feed, setFeed] = useState<FeedState>(initialFeedState);
   const [connection, setConnection] = useState('disconnected');
-  const lastId = useRef(0);
   const snapshot = useQuery({
     queryKey: ['run', runId],
     enabled: runId !== null,
@@ -25,8 +33,7 @@ function App() {
       body: JSON.stringify({ preset: 'fake-duel', autoStart: true }),
     }),
     onSuccess: ({ run }) => {
-      lastId.current = 0;
-      setEvents([]);
+      setFeed(initialFeedState());
       setRunId(run.id);
       cache.setQueryData(['run', run.id], run);
     },
@@ -35,45 +42,66 @@ function App() {
 
   useEffect(() => {
     if (runId === null) return;
+    // Native EventSource auto-reconnects and resends the last SSE id as
+    // Last-Event-ID (the global id), so the backend replays from there. Dedup on
+    // id inside ingestEvent removes the replay overlap.
     const source = new EventSource(`/runs/${runId}/events`);
-    source.onopen = () => setConnection(lastId.current === 0 ? 'connected' : 'reconnected, no gap');
-    source.onerror = () => setConnection('reconnecting');
+    source.onopen = () => setConnection('connected');
+    source.onerror = () => setConnection('reconnecting…');
     source.onmessage = (message) => {
       const event = JSON.parse(message.data) as ArenaEvent;
-      if (lastId.current > 0 && event.id !== lastId.current + 1) {
-        setConnection(`gap or global-id skip: ${lastId.current} → ${event.id}`);
-      }
-      lastId.current = event.id;
-      setEvents((current) => current.some(({ id }) => id === event.id) ? current : [...current, event]);
+      setFeed((current) => ingestEvent(current, event));
       cache.setQueryData<RunSnapshot>(['run', runId], (current) => projectSnapshot(current, event));
     };
     return () => source.close();
   }, [cache, runId]);
 
+  const runLog = useMemo(() => eventsForSource(feed.events, RUN_SOURCE), [feed.events]);
+
   return (
-    <main>
+    <main style={{ fontFamily: 'monospace', padding: 16 }}>
       <h1>Agents Arena mock</h1>
       <button disabled={createRun.isPending} onClick={() => createRun.mutate()}>
         {createRun.isPending ? 'Creating…' : 'Create and start fake duel'}
       </button>
       {createRun.error instanceof Error ? <p>{createRun.error.message}</p> : null}
       <p>Run: {run?.id ?? 'none'}</p>
-      <p>State: <strong>{run?.state ?? 'none'}</strong> | Stream: {connection}</p>
+      <p>
+        State: <strong>{run?.state ?? 'none'}</strong> | Stream:{' '}
+        <span data-testid="connection">{connection}</span> | Events: {feed.events.length}
+      </p>
+      {feed.gaps.length > 0 ? (
+        <ul data-testid="gap-banner" style={{ background: '#ffe0e0', border: '1px solid #c00', padding: 8 }}>
+          {feed.gaps.map((gap, index) => (
+            <li key={`${gap.source}-${gap.to}-${index}`}>
+              gap detected in {gap.source}: seq {gap.from} → {gap.to}
+            </li>
+          ))}
+        </ul>
+      ) : null}
       <section style={{ display: 'flex', gap: 24, alignItems: 'flex-start' }}>
         {(run?.entrants ?? []).map((entrant) => (
-          <EntrantLane key={entrant.id} runId={run?.id ?? ''} entrant={entrant} events={events} />
+          <EntrantLane key={entrant.id} runId={run?.id ?? ''} entrant={entrant} feed={feed} />
         ))}
       </section>
+      <h2>Run-level log</h2>
+      <ul data-testid="run-log">
+        {runLog.map((event) => (
+          <li key={event.id}>
+            <code>{event.type}</code> {describeEvent(event)}
+          </li>
+        ))}
+      </ul>
       <h2>Raw event log</h2>
-      <pre>{events.map((event) => JSON.stringify(event)).join('\n')}</pre>
+      <pre>{feed.events.map((event) => JSON.stringify(event)).join('\n')}</pre>
     </main>
   );
 }
 
-function EntrantLane({ runId, entrant, events }: {
+function EntrantLane({ runId, entrant, feed }: {
   runId: string;
   entrant: EntrantSummary;
-  events: ArenaEvent[];
+  feed: FeedState;
 }) {
   const [text, setText] = useState('');
   const steer = useMutation({
@@ -88,21 +116,29 @@ function EntrantLane({ runId, entrant, events }: {
     onSuccess: () => setText(''),
   });
   const laneEvents = useMemo(
-    () => events.filter((event) => event.source === entrant.id && (
-      event.type === 'agent.message' || event.type === 'tool.call' || event.type === 'tool.result'
-    )),
-    [entrant.id, events],
+    () => eventsForSource(feed.events, entrant.id),
+    [entrant.id, feed.events],
   );
+  const laneGaps = useMemo(() => gapsForSource(feed.gaps, entrant.id), [entrant.id, feed.gaps]);
 
   return (
-    <article style={{ width: '50%' }}>
+    <article style={{ width: '50%', border: '1px solid #999', padding: 8 }}>
       <h2>{entrant.id}</h2>
-      <p>{entrant.harness} / {entrant.model} / {entrant.status}</p>
-      <input value={text} onChange={(event) => setText(event.target.value)} />
+      <p>{entrant.harness} / {entrant.model} / <strong>{entrant.status}</strong> / flags {entrant.flags}</p>
+      {laneGaps.length > 0 ? (
+        <p data-testid={`lane-gap-${entrant.id}`} style={{ color: '#c00' }}>
+          gap detected in {entrant.id}: {laneGaps.map((gap) => `${gap.from}→${gap.to}`).join(', ')}
+        </p>
+      ) : null}
+      <input value={text} onChange={(event) => setText(event.target.value)} placeholder="steer text" />
       <button disabled={text.length === 0 || steer.isPending} onClick={() => steer.mutate(text)}>Steer</button>
       {steer.error instanceof Error ? <p>{steer.error.message}</p> : null}
-      <ul>
-        {laneEvents.map((event) => <li key={event.id}><code>{event.type}</code> {JSON.stringify(event.payload)}</li>)}
+      <ul data-testid={`lane-${entrant.id}`}>
+        {laneEvents.map((event) => (
+          <li key={event.id}>
+            <code>{event.type}</code> {describeEvent(event)}
+          </li>
+        ))}
       </ul>
     </article>
   );
