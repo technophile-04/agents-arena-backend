@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
@@ -13,11 +13,23 @@ import {
   RUN_SOURCE,
   type FeedState,
 } from './feed-projection';
+import { runPhase, styleForEvent, totalUsage } from './event-style';
+import './styles.css';
 
 const queryClient = new QueryClient();
 
+const PRESETS = ['fake-duel', 'docker-duel'] as const;
+type Preset = (typeof PRESETS)[number];
+
+const HARNESS_COLOR: Record<string, string> = {
+  codex: 'var(--codex)',
+  opencode: 'var(--opencode)',
+  claude: 'var(--claude)',
+};
+
 function App() {
   const cache = useQueryClient();
+  const [preset, setPreset] = useState<Preset>('fake-duel');
   const [runId, setRunId] = useState<string | null>(null);
   const [feed, setFeed] = useState<FeedState>(initialFeedState);
   const [connection, setConnection] = useState('disconnected');
@@ -30,7 +42,7 @@ function App() {
     mutationFn: async () => fetchJson<{ run: RunSnapshot }>('/runs', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ preset: 'fake-duel', autoStart: true }),
+      body: JSON.stringify({ preset, autoStart: true }),
     }),
     onSuccess: ({ run }) => {
       setFeed(initialFeedState());
@@ -57,56 +69,137 @@ function App() {
   }, [cache, runId]);
 
   const runLog = useMemo(() => eventsForSource(feed.events, RUN_SOURCE), [feed.events]);
+  const phase = runPhase(run?.state);
+  const entrants = run?.entrants ?? [];
+  const connClass = connection === 'connected'
+    ? 'connected'
+    : connection === 'disconnected'
+      ? ''
+      : 'reconnecting';
 
   return (
-    <main style={{ fontFamily: 'monospace', padding: 16 }}>
-      <h1>Agents Arena mock</h1>
-      <button disabled={createRun.isPending} onClick={() => createRun.mutate()}>
-        {createRun.isPending ? 'Creating…' : 'Create and start fake duel'}
-      </button>
-      {createRun.error instanceof Error ? <p>{createRun.error.message}</p> : null}
-      <p>Run: {run?.id ?? 'none'}</p>
-      <p>
-        State: <strong>{run?.state ?? 'none'}</strong> | Stream:{' '}
-        <span data-testid="connection">{connection}</span> | Events: {feed.events.length}
-      </p>
+    <div className="shell">
+      <header className="masthead">
+        <div>
+          <h1 className="wordmark">
+            agents<span className="spark">·</span>arena
+          </h1>
+          <p className="tagline">two coding agents race an on-chain ctf. one operator, live.</p>
+        </div>
+        <div className="link-status">
+          <span className={`dot ${connClass}`} />
+          <span data-testid="connection">{connection}</span>
+        </div>
+      </header>
+
+      <div className="controls">
+        <span className="field">
+          <label htmlFor="preset">preset</label>
+          <select
+            id="preset"
+            className="preset"
+            value={preset}
+            disabled={createRun.isPending}
+            onChange={(event) => setPreset(event.target.value as Preset)}
+          >
+            {PRESETS.map((value) => (
+              <option key={value} value={value}>{value}</option>
+            ))}
+          </select>
+        </span>
+        <button className="btn start" disabled={createRun.isPending} onClick={() => createRun.mutate()}>
+          {createRun.isPending ? 'starting…' : 'start race'}
+        </button>
+        <span className="run-id">
+          run <b>{run?.id ?? '—'}</b>
+        </span>
+      </div>
+
+      {createRun.error instanceof Error ? <p className="error-line">{createRun.error.message}</p> : null}
+
+      {run !== null ? (
+        <div className="status-strip">
+          <span className={`pill ${phase}`}>
+            <span className="dot" />
+            {run.state}
+          </span>
+          <span className="meta-count">
+            <b>{feed.events.length}</b> events
+          </span>
+        </div>
+      ) : null}
+
       {feed.gaps.length > 0 ? (
-        <ul data-testid="gap-banner" style={{ background: '#ffe0e0', border: '1px solid #c00', padding: 8 }}>
+        <ul className="gap-banner" data-testid="gap-banner">
           {feed.gaps.map((gap, index) => (
             <li key={`${gap.source}-${gap.to}-${index}`}>
-              gap detected in {gap.source}: seq {gap.from} → {gap.to}
+              gap in {gap.source}: seq {gap.from} → {gap.to} (events dropped)
             </li>
           ))}
         </ul>
       ) : null}
-      <section style={{ display: 'flex', gap: 24, alignItems: 'flex-start' }}>
-        {(run?.entrants ?? []).map((entrant) => (
-          <EntrantLane key={entrant.id} runId={run?.id ?? ''} entrant={entrant} feed={feed} />
-        ))}
-      </section>
-      <h2>Run-level log</h2>
-      <ul data-testid="run-log">
-        {runLog.map((event) => (
-          <li key={event.id}>
-            <code>{event.type}</code> {describeEvent(event)}
-          </li>
-        ))}
+
+      {run === null ? (
+        <div className="empty-board">
+          <b>no run yet</b>
+          pick a preset and start a race to watch both agents stream live.
+        </div>
+      ) : (
+        <section className="scoreboard">
+          <EntrantLane runId={run.id} entrant={entrants[0]} feed={feed} side="left" />
+          <div className="rail">
+            <span className="vs">vs</span>
+            <span className="lead">{leadLabel(entrants)}</span>
+            <span className="rail-line" />
+          </div>
+          <EntrantLane runId={run.id} entrant={entrants[1]} feed={feed} side="right" />
+        </section>
+      )}
+
+      <h2 className="section-head">run log</h2>
+      <ul className={`run-log${runLog.length === 0 ? ' empty' : ''}`} data-testid="run-log">
+        {runLog.length === 0
+          ? <li>no run-level events yet.</li>
+          : runLog.map((event) => <FeedRow key={event.id} event={event} />)}
       </ul>
-      <h2>Raw event log</h2>
-      <pre>{feed.events.map((event) => JSON.stringify(event)).join('\n')}</pre>
-    </main>
+
+      <details className="raw">
+        <summary>raw event log ({feed.events.length})</summary>
+        <pre>{feed.events.map((event) => JSON.stringify(event)).join('\n') || 'no events.'}</pre>
+      </details>
+    </div>
   );
 }
 
-function EntrantLane({ runId, entrant, feed }: {
+function leadLabel(entrants: EntrantSummary[]): string {
+  if (entrants.length < 2) return '';
+  const [a, b] = entrants;
+  if (a.flags === b.flags) return `even · ${a.flags} flag${a.flags === 1 ? '' : 's'} each`;
+  const leader = a.flags > b.flags ? a : b;
+  const margin = Math.abs(a.flags - b.flags);
+  return `${leader.id} leads by ${margin}`;
+}
+
+function FeedRow({ event }: { event: ArenaEvent }) {
+  const style = styleForEvent(event);
+  return (
+    <li className={`row tone-${style.tone}`}>
+      <span className="tag">{style.tag}</span>
+      <span className="body">{describeEvent(event)}</span>
+    </li>
+  );
+}
+
+function EntrantLane({ runId, entrant, feed, side }: {
   runId: string;
-  entrant: EntrantSummary;
+  entrant: EntrantSummary | undefined;
   feed: FeedState;
+  side: 'left' | 'right';
 }) {
   const [text, setText] = useState('');
   const steer = useMutation({
     mutationFn: async (steeringText: string) => fetchJson<{ accepted: boolean }>(
-      `/runs/${runId}/entrants/${entrant.id}/steer`,
+      `/runs/${runId}/entrants/${entrant?.id}/steer`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -116,29 +209,69 @@ function EntrantLane({ runId, entrant, feed }: {
     onSuccess: () => setText(''),
   });
   const laneEvents = useMemo(
-    () => eventsForSource(feed.events, entrant.id),
-    [entrant.id, feed.events],
+    () => (entrant ? eventsForSource(feed.events, entrant.id) : []),
+    [entrant, feed.events],
   );
-  const laneGaps = useMemo(() => gapsForSource(feed.gaps, entrant.id), [entrant.id, feed.gaps]);
+  const laneGaps = useMemo(
+    () => (entrant ? gapsForSource(feed.gaps, entrant.id) : []),
+    [entrant, feed.gaps],
+  );
+  const usage = useMemo(() => totalUsage(laneEvents), [laneEvents]);
+
+  if (!entrant) return <div className="lane" />;
+  const laneColor = HARNESS_COLOR[entrant.harness] ?? 'var(--muted)';
 
   return (
-    <article style={{ width: '50%', border: '1px solid #999', padding: 8 }}>
-      <h2>{entrant.id}</h2>
-      <p>{entrant.harness} / {entrant.model} / <strong>{entrant.status}</strong> / flags {entrant.flags}</p>
+    <article
+      className={`lane ${side}`}
+      style={{ ['--lane' as string]: laneColor }}
+    >
+      <div className="lane-head">
+        <h2 className="lane-name">{entrant.id}</h2>
+        <span className="lane-harness">{entrant.harness}</span>
+      </div>
+      <p className="lane-model">{entrant.model}</p>
+
+      <div className="lane-stats">
+        <span className="stat">
+          <span className={`status-tag ${entrant.status}`}>{entrant.status}</span>
+        </span>
+        <span className="stat flags-count">
+          flags <b>{entrant.flags}</b>
+        </span>
+        <span className="stat">
+          tokens <b>{usage.input}</b> in / <b>{usage.output}</b> out
+        </span>
+      </div>
+
       {laneGaps.length > 0 ? (
-        <p data-testid={`lane-gap-${entrant.id}`} style={{ color: '#c00' }}>
-          gap detected in {entrant.id}: {laneGaps.map((gap) => `${gap.from}→${gap.to}`).join(', ')}
+        <p className="lane-gap" data-testid={`lane-gap-${entrant.id}`}>
+          gap in {entrant.id}: {laneGaps.map((gap) => `${gap.from}→${gap.to}`).join(', ')}
         </p>
       ) : null}
-      <input value={text} onChange={(event) => setText(event.target.value)} placeholder="steer text" />
-      <button disabled={text.length === 0 || steer.isPending} onClick={() => steer.mutate(text)}>Steer</button>
-      {steer.error instanceof Error ? <p>{steer.error.message}</p> : null}
-      <ul data-testid={`lane-${entrant.id}`}>
-        {laneEvents.map((event) => (
-          <li key={event.id}>
-            <code>{event.type}</code> {describeEvent(event)}
-          </li>
-        ))}
+
+      <div className="steer-row">
+        <input
+          className="steer"
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+          placeholder="inject a message to this agent"
+        />
+        <button
+          className="btn steer-btn"
+          disabled={text.length === 0 || steer.isPending}
+          onClick={() => steer.mutate(text)}
+        >
+          steer
+        </button>
+      </div>
+      {steer.error instanceof Error ? <p className="error-line">{steer.error.message}</p> : null}
+
+      <p className="feed-label">live feed</p>
+      <ul className={`feed${laneEvents.length === 0 ? ' empty' : ''}`} data-testid={`lane-${entrant.id}`}>
+        {laneEvents.length === 0
+          ? <li>waiting for the agent to act…</li>
+          : laneEvents.map((event) => <FeedRow key={event.id} event={event} />)}
       </ul>
     </article>
   );
