@@ -79,7 +79,7 @@ const PRESETS: Readonly<Record<string, readonly PresetEntrant[]>> = {
   ],
   'docker-duel': [
     { id: 'codex-1', harness: 'codex', model: 'gpt-5.5' },
-    { id: 'opencode-1', harness: 'opencode', model: 'openrouter/deepseek/deepseek-chat' },
+    { id: 'opencode-1', harness: 'opencode', model: 'openrouter/z-ai/glm-5.2' },
   ],
 };
 
