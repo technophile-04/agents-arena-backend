@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agents Arena — How it works today</title>
+<style>
+  :root {
+    --bg: #0c0f16;
+    --surface: #131826;
+    --surface-2: #19202f;
+    --line: #253044;
+    --line-soft: #1c2534;
+    --text: #e7ecf4;
+    --muted: #8a97ac;
+    --faint: #5b6879;
+    --codex: #f4b860;
+    --opencode: #5cc8f2;
+    --green: #5fd39a;
+    --red: #f26a82;
+    --steer: #ffcf6b;
+    --chain: #7ad6b0;
+    --purple: #b79cf0;
+    --display: 'Space Grotesk', system-ui, -apple-system, sans-serif;
+    --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+    --radius: 10px;
+  }
+
+  * { box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--display);
+    font-size: 17px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  a { color: var(--opencode); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  code, .path {
+    font-family: var(--mono);
+    font-size: 0.86em;
+  }
+
+  .path {
+    color: var(--chain);
+    background: var(--surface-2);
+    border: 1px solid var(--line-soft);
+    border-radius: 5px;
+    padding: 1px 6px;
+    white-space: nowrap;
+  }
+
+  .wrap { max-width: 860px; margin: 0 auto; padding: 0 24px; }
+
+  /* ---- masthead ---- */
+  header.top {
+    border-bottom: 1px solid var(--line);
+    background: linear-gradient(180deg, #10151f 0%, var(--bg) 100%);
+    padding: 56px 0 40px;
+  }
+  header.top .tag {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--faint);
+    margin: 0 0 14px;
+  }
+  header.top h1 {
+    font-size: 44px;
+    line-height: 1.05;
+    font-weight: 700;
+    margin: 0 0 16px;
+    letter-spacing: -0.02em;
+  }
+  header.top p.lede {
+    font-size: 19px;
+    color: var(--muted);
+    max-width: 640px;
+    margin: 0;
+  }
+  header.top .lane-chips { margin-top: 22px; display: flex; gap: 10px; flex-wrap: wrap; }
+  .chip {
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 4px 11px;
+    border-radius: 20px;
+    border: 1px solid var(--line);
+    color: var(--muted);
+  }
+  .chip.codex { border-color: var(--codex); color: var(--codex); }
+  .chip.opencode { border-color: var(--opencode); color: var(--opencode); }
+
+  /* ---- section nav ---- */
+  nav.toc {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    background: rgba(12,15,22,0.92);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--line);
+  }
+  nav.toc ol {
+    list-style: none;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin: 0 auto;
+    max-width: 860px;
+    padding: 12px 24px;
+    font-family: var(--mono);
+    font-size: 12.5px;
+  }
+  nav.toc li { color: var(--muted); }
+  nav.toc a {
+    color: var(--muted);
+    border: 1px solid var(--line-soft);
+    border-radius: 6px;
+    padding: 4px 9px;
+    display: inline-block;
+  }
+  nav.toc a:hover { color: var(--text); border-color: var(--line); text-decoration: none; }
+  nav.toc .n { color: var(--faint); margin-right: 6px; }
+
+  /* ---- sections ---- */
+  section { padding: 52px 0 8px; border-top: 1px solid var(--line-soft); }
+  section:first-of-type { border-top: none; }
+
+  .sec-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 6px; }
+  .sec-head .num {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--faint);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 3px 8px;
+    flex: none;
+  }
+  h2 { font-size: 28px; font-weight: 700; margin: 0; letter-spacing: -0.01em; }
+  h3 {
+    font-size: 15px;
+    font-family: var(--mono);
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--muted);
+    margin: 34px 0 12px;
+    font-weight: 500;
+  }
+  p { margin: 0 0 16px; }
+  .muted { color: var(--muted); }
+
+  ul.facts { list-style: none; padding: 0; margin: 0 0 16px; }
+  ul.facts li {
+    padding: 8px 0 8px 22px;
+    position: relative;
+    border-bottom: 1px solid var(--line-soft);
+  }
+  ul.facts li:before {
+    content: "";
+    position: absolute;
+    left: 3px;
+    top: 17px;
+    width: 6px;
+    height: 6px;
+    border-radius: 2px;
+    background: var(--chain);
+  }
+
+  /* ---- callout ---- */
+  .note {
+    border-left: 3px solid var(--steer);
+    background: var(--surface);
+    border-radius: 0 var(--radius) var(--radius) 0;
+    padding: 14px 18px;
+    margin: 20px 0;
+    font-size: 15.5px;
+    color: var(--muted);
+  }
+  .note b { color: var(--text); }
+
+  /* ---- diagram frame ---- */
+  figure.diagram {
+    margin: 26px 0;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 26px 22px 20px;
+  }
+  figure.diagram figcaption {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--faint);
+    margin-top: 18px;
+    text-align: center;
+  }
+
+  .box {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 9px 12px;
+    text-align: center;
+    line-height: 1.4;
+  }
+  .box .b-title { color: var(--text); display: block; font-size: 13px; }
+  .box .b-sub { color: var(--faint); display: block; font-size: 10.5px; margin-top: 3px; }
+  .box.state { border-color: var(--purple); color: var(--purple); }
+  .box.gate { border-color: var(--steer); color: var(--steer); }
+  .box.run { border-color: var(--green); color: var(--green); }
+  .box.codex { border-color: var(--codex); }
+  .box.opencode { border-color: var(--opencode); }
+  .box.chain { border-color: var(--chain); color: var(--chain); }
+
+  /* pipeline row */
+  .pipe { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: center; }
+  .pipe .box { flex: 1 1 108px; min-width: 92px; }
+  .arrow { color: var(--faint); font-family: var(--mono); font-size: 18px; flex: none; }
+  .arrow.down { display: block; text-align: center; margin: 6px 0; }
+
+  .stack { display: flex; flex-direction: column; gap: 10px; }
+  .cols2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .cols2 .arrow { text-align: center; }
+
+  .container-card {
+    border: 1px dashed var(--line);
+    border-radius: 8px;
+    padding: 14px;
+    background: var(--bg);
+  }
+  .container-card .ct-head {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--faint);
+    margin-bottom: 10px;
+  }
+  .mount {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    background: var(--surface-2);
+    border: 1px solid var(--line-soft);
+    border-radius: 6px;
+    padding: 7px 10px;
+    margin-bottom: 7px;
+    color: var(--muted);
+  }
+  .mount .k { color: var(--chain); }
+  .mount .secret { color: var(--steer); }
+
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 4px; }
+  .legend span:before { content: "■ "; }
+  .legend .l-state:before { color: var(--purple); }
+  .legend .l-gate:before { color: var(--steer); }
+  .legend .l-run:before { color: var(--green); }
+  .legend .l-chain:before { color: var(--chain); }
+
+  table.map { width: 100%; border-collapse: collapse; margin: 18px 0; font-size: 14px; }
+  table.map th, table.map td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+  table.map th { color: var(--muted); font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; font-weight: 500; }
+  table.map td:first-child { white-space: nowrap; }
+
+  footer { border-top: 1px solid var(--line); margin-top: 60px; padding: 30px 0 60px; color: var(--faint); font-size: 14px; }
+  footer .path { color: var(--faint); }
+
+  @media (max-width: 620px) {
+    header.top h1 { font-size: 32px; }
+    .cols2 { grid-template-columns: 1fr; }
+    body { font-size: 16px; }
+  }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <p class="tag">Agents Arena · architecture, as built today</p>
+    <h1>How the arena runs a race</h1>
+    <p class="lede">Two coding agents work the same practice-puzzle chain, each in its own container, and every step streams to the frontend. This page walks the five flows that make one run happen, straight from the code.</p>
+    <div class="lane-chips">
+      <span class="chip codex">codex entrant</span>
+      <span class="chip opencode">opencode entrant</span>
+      <span class="chip">private local chain · 31337</span>
+    </div>
+  </div>
+</header>
+
+<nav class="toc">
+  <ol>
+    <li><a href="#flow1"><span class="n">1</span>Wallet + funding</a></li>
+    <li><a href="#flow2"><span class="n">2</span>Credentials into containers</a></li>
+    <li><a href="#flow3"><span class="n">3</span>Events + SSE</a></li>
+    <li><a href="#flow4"><span class="n">4</span>Frontend sync</a></li>
+    <li><a href="#flow5"><span class="n">5</span>Steer</a></li>
+  </ol>
+</nav>
+
+<main class="wrap">
+
+  <p class="muted" style="margin-top:40px">
+    One process owns a run: its lifecycle, the two containers, the credentials, and the append-only event journal in SQLite. The arena runs on a private chain built only for practice puzzles. Each puzzle is a small Solidity contract with an intended solution, like an advent-of-code box. Nothing here is a live system.
+  </p>
+
+  <!-- ============ FLOW 1 ============ -->
+  <section id="flow1">
+    <div class="sec-head">
+      <span class="num">01</span>
+      <h2>Wallet generation and funding</h2>
+    </div>
+    <p>Starting a run walks a state machine. Each step is a legal transition; an illegal one throws. The wallet and funding work happens between <code>preparing</code> and <code>ready</code>, so an agent never boots without a funded burner to sign with.</p>
+
+    <figure class="diagram">
+      <div class="pipe">
+        <div class="box state"><span class="b-title">created</span><span class="b-sub">run row + entrants</span></div>
+        <span class="arrow">&rarr;</span>
+        <div class="box state"><span class="b-title">preparing</span><span class="b-sub">wallets, then containers</span></div>
+        <span class="arrow">&rarr;</span>
+        <div class="box gate"><span class="b-title">awaiting_funding</span><span class="b-sub">watch + fund</span></div>
+        <span class="arrow">&rarr;</span>
+        <div class="box state"><span class="b-title">ready</span><span class="b-sub">both held</span></div>
+        <span class="arrow">&rarr;</span>
+        <div class="box run"><span class="b-title">running</span><span class="b-sub">one start time</span></div>
+      </div>
+      <span class="arrow down">&darr; on any failure or operator stop</span>
+      <div class="pipe">
+        <div class="box state" style="border-color:var(--faint);color:var(--muted)">running &rarr; stopping &rarr; finished</div>
+        <span class="arrow">/</span>
+        <div class="box" style="border-color:var(--red);color:var(--red)">failed</div>
+      </div>
+      <figcaption>Run state machine · LEGAL_TRANSITIONS in run-manager.ts</figcaption>
+    </figure>
+
+    <h3>How the burner is born</h3>
+    <p>In the <code>preparing</code> phase the wallet gate runs first, before any container exists. It makes one burner per entrant so the address is known when the container gets its environment.</p>
+    <ul class="facts">
+      <li>The gate loops over both entrants and calls <code>createWallet</code>, which does <code>generatePrivateKey()</code> from viem, derives the address, and writes both to the <code>wallets</code> table. <span class="path">src/chain/wallet.ts</span></li>
+      <li>It writes the address back onto the entrant row (<code>entrants.address</code>) and emits a <code>wallet.assigned</code> event on that entrant's lane. <span class="path">src/chain/funding-gate.ts</span> · <code>createWalletGate</code></li>
+      <li>The private key stays in SQLite and later rides into the container as an env var. It is never emitted as an event.</li>
+    </ul>
+
+    <h3>How the burner gets funded</h3>
+    <p>After both containers prepare, the run moves to <code>awaiting_funding</code> and the funding gate runs. It starts the balance watcher, then funds the burners, and holds the run until both cross the line.</p>
+    <ul class="facts">
+      <li>The watcher <code>awaitFunding</code> starts first and polls every 500&nbsp;ms. It reads each balance at <code>head &minus; confirmations</code>, not at head. <span class="path">src/chain/funding-watcher.ts</span></li>
+      <li>Funding sends <code>0.1&nbsp;ETH</code> to each burner from Hardhat dev account&nbsp;0 (the well-known local key). It only runs when the profile is <code>local</code> and the chain id is <code>31337</code>. <span class="path">src/chain/funding-gate.ts</span> · <code>fundLocalEntrants</code></li>
+      <li>It then mines one block with <code>evm_mine</code>. The local profile sets <code>confirmations: 1</code>, so mining one block moves the funding transaction to <code>head &minus; 1</code> where the watcher can see it. <span class="path">config/chains.json</span></li>
+      <li>Every time a balance changes, the watcher emits a <code>funding.balance</code> event with the wei amount and a <code>funded</code> flag. The gate resolves once both burners hold at least <code>0.05&nbsp;ETH</code>, then the run moves to <code>ready</code>.</li>
+    </ul>
+
+    <div class="note">
+      <b>Two facts the summary left out.</b> Both the wallet gate and the funding gate return early unless the preset is <code>docker-duel</code>. The <code>fake-duel</code> preset skips wallets and funding entirely and streams canned events. And the funder key and profile are overridable through <code>ARENA_FUNDER_KEY</code> and <code>ARENA_CHAIN_PROFILE</code>; the Hardhat account is the default, not a hard-coded constant. <span class="path">src/chain/funding-gate.ts</span>
+    </div>
+  </section>
+
+  <!-- ============ FLOW 2 ============ -->
+  <section id="flow2">
+    <div class="sec-head">
+      <span class="num">02</span>
+      <h2>Credentials into each container</h2>
+    </div>
+    <p>Each entrant runs in its own hardened container. Before the container starts, the driver builds a temporary credential directory on the host and mounts it in. Login files go in over a mount; the wallet and the RPC URL go in as environment variables.</p>
+
+    <figure class="diagram">
+      <div class="cols2">
+        <div class="container-card">
+          <div class="ct-head" style="color:var(--codex)">codex entrant · /work</div>
+          <div class="mount"><span class="k">mount</span> host temp dir &rarr; <code>/creds/codex</code></div>
+          <div class="mount">auth.json · config.toml</div>
+          <div class="mount"><span class="k">env</span> CODEX_HOME=/creds/codex</div>
+          <div class="mount"><span class="k">env</span> ETH_RPC_URL</div>
+          <div class="mount"><span class="secret">env</span> WALLET_ADDRESS · WALLET_PRIVATE_KEY</div>
+        </div>
+        <div class="container-card">
+          <div class="ct-head" style="color:var(--opencode)">opencode entrant · /work</div>
+          <div class="mount"><span class="k">mount</span> host temp dir &rarr; <code>/creds/opencode</code></div>
+          <div class="mount"><span class="secret">env</span> OPENROUTER_API_KEY</div>
+          <div class="mount"><span class="k">env</span> ETH_RPC_URL</div>
+          <div class="mount"><span class="secret">env</span> WALLET_ADDRESS · WALLET_PRIVATE_KEY</div>
+        </div>
+      </div>
+      <span class="arrow down">&darr; both reach the host chain over</span>
+      <div class="pipe">
+        <div class="box chain"><span class="b-title">host.docker.internal:8545</span><span class="b-sub">ExtraHosts: host-gateway</span></div>
+      </div>
+      <figcaption>Per-entrant credential mount + env · codex.ts / opencode.ts</figcaption>
+    </figure>
+
+    <h3>codex</h3>
+    <ul class="facts">
+      <li>Makes a fresh temp dir, copies the operator's <code>auth.json</code> in, and writes a <code>config.toml</code>. It pins a model only when the preset names one; a ChatGPT-account login rejects API-only model ids, so the default login stays on its own default. <span class="path">src/adapters/codex.ts</span> · <code>createContainer</code></li>
+      <li>Mounts that dir at <code>/creds/codex</code> and sets <code>CODEX_HOME</code> to the same path so the CLI finds the login.</li>
+    </ul>
+
+    <h3>opencode</h3>
+    <ul class="facts">
+      <li>Makes a temp dir mounted at <code>/creds/opencode</code>. The OpenRouter key comes from <code>OPENROUTER_API_KEY</code> or the operator's opencode <code>auth.json</code>, and rides in as the <code>OPENROUTER_API_KEY</code> env var. <span class="path">src/adapters/opencode.ts</span></li>
+      <li><code>OPENCODE_SERVER_PASSWORD</code> and <code>OPENCODE_PORT</code> get stripped from the container environment before launch. <span class="path">scrubOpenCodeEnvironment</span></li>
+    </ul>
+
+    <h3>Wallet injection (both harnesses)</h3>
+    <ul class="facts">
+      <li>The driver reads the burner from SQLite with <code>getWallet</code> and, when it exists, adds <code>WALLET_ADDRESS</code> and <code>WALLET_PRIVATE_KEY</code> to the container env alongside <code>ETH_RPC_URL</code>. The agent signs with <code>cast send --private-key "$WALLET_PRIVATE_KEY"</code>.</li>
+    </ul>
+
+    <h3>Why the container is boxed in</h3>
+    <ul class="facts">
+      <li><code>CapDrop: ['ALL']</code> and <code>SecurityOpt: ['no-new-privileges']</code>: no Linux capabilities, no privilege escalation. Never privileged, never mounts the Docker socket. <span class="path">src/runtime/container.ts</span></li>
+      <li>Bounded resources: <code>PidsLimit 512</code>, <code>Memory 2&nbsp;GiB</code>, <code>NanoCpus 2</code>. One private bridge network per entrant, and its own credential mount.</li>
+      <li><code>ExtraHosts: ['host.docker.internal:host-gateway']</code> lets the container reach the chain running on the host. <code>ETH_RPC_URL</code> points at <code>http://host.docker.internal:8545</code>.</li>
+    </ul>
+
+    <div class="note">
+      <b>Why not <code>localhost:8545</code>.</b> Inside a container, <code>localhost</code> is the container itself, not the host. The chain runs on the host, so the container reaches it through <code>host.docker.internal</code>, which the host-gateway entry resolves. The opening prompt tells the agent this outright. <span class="path">src/run-manager.ts</span> · <code>buildOpeningPrompt</code>
+    </div>
+  </section>
+
+  <!-- ============ FLOW 3 ============ -->
+  <section id="flow3">
+    <div class="sec-head">
+      <span class="num">03</span>
+      <h2>Server-side events and the SSE feed</h2>
+    </div>
+    <p>Every fact in a run is one row in an append-only journal. The frontend reads that journal over one server-sent-events stream per run. A reconnect replays from where it left off with no gap and no duplicate.</p>
+
+    <figure class="diagram">
+      <div class="pipe">
+        <div class="box"><span class="b-title">append()</span><span class="b-sub">drivers + gates</span></div>
+        <span class="arrow">&rarr;</span>
+        <div class="box"><span class="b-title">events table</span><span class="b-sub">id · seq · source</span></div>
+        <span class="arrow">&rarr;</span>
+        <div class="box gate"><span class="b-title">GET /runs/:id/events</span><span class="b-sub">replay then live</span></div>
+        <span class="arrow">&rarr;</span>
+        <div class="box opencode"><span class="b-title">EventSource</span><span class="b-sub">browser</span></div>
+      </div>
+      <span class="arrow down">&darr; each row carries</span>
+      <div class="pipe">
+        <div class="box"><span class="b-title">id</span><span class="b-sub">journal-wide, global</span></div>
+        <div class="box"><span class="b-title">seq</span><span class="b-sub">per (run, source)</span></div>
+        <div class="box"><span class="b-title">source</span><span class="b-sub">entrant id · or "run"</span></div>
+      </div>
+      <figcaption>Journal &rarr; SSE &rarr; browser · journal.ts / server.ts</figcaption>
+    </figure>
+
+    <h3>The journal</h3>
+    <ul class="facts">
+      <li><code>append</code> assigns two numbers in one transaction: a global autoincrement <code>id</code> shared across all runs, and a <code>seq</code> that counts up per <code>(runId, source)</code>. <span class="path">src/journal.ts</span></li>
+      <li><code>source</code> is the entrant id for a lane event, or the literal <code>'run'</code> for a run-level event like a state change.</li>
+      <li>After the write, <code>append</code> pushes the event to any live subscriber for that run. <code>after(runId, afterId)</code> reads back every row past a given id, in id order.</li>
+    </ul>
+
+    <h3>The SSE endpoint</h3>
+    <ul class="facts">
+      <li><code>GET /runs/:id/events</code> resumes from a cursor: it takes the higher of the <code>?after</code> query and the <code>Last-Event-ID</code> header. <span class="path">src/server.ts</span> · <code>openEventStream</code></li>
+      <li>Replay then live, with no lost event in the seam: it subscribes first and buffers arriving events in a <code>pending</code> list while it replays history, then sorts the buffer by id and flushes it. <code>send</code> drops anything at or below the last id it wrote, so the overlap never double-sends.</li>
+      <li>It writes each event as <code>id: &lt;n&gt;</code> + <code>data: &lt;json&gt;</code>, and sends a <code>: heartbeat</code> comment every 15&nbsp;s to hold the connection open.</li>
+    </ul>
+  </section>
+
+  <!-- ============ FLOW 4 ============ -->
+  <section id="flow4">
+    <div class="sec-head">
+      <span class="num">04</span>
+      <h2>How the frontend syncs</h2>
+    </div>
+    <p>The frontend keeps no clever server mirror. It folds the event stream into one state object. Reconnect overlap gets deduped, real data loss gets flagged, and every event type renders as a line so the feed never blanks.</p>
+
+    <figure class="diagram">
+      <div class="stack">
+        <div class="box"><span class="b-title">ingestEvent(state, event)</span><span class="b-sub">one pure fold per event</span></div>
+        <span class="arrow down">&darr;</span>
+        <div class="pipe">
+          <div class="box"><span class="b-title">seenIds.has(id)?</span><span class="b-sub">yes &rarr; drop, same state</span></div>
+          <div class="box"><span class="b-title">seq &gt; lastSeq+1?</span><span class="b-sub">yes &rarr; record gap</span></div>
+        </div>
+        <span class="arrow down">&darr;</span>
+        <div class="cols2">
+          <div class="box codex"><span class="b-title">lane: codex-1</span><span class="b-sub">source === entrantId</span></div>
+          <div class="box opencode"><span class="b-title">lane: opencode-1</span><span class="b-sub">source === entrantId</span></div>
+        </div>
+        <span class="arrow down">&darr; each lane header</span>
+        <div class="box chain"><span class="b-title">deriveLaneWallet</span><span class="b-sub">address + funding from snapshot + events</span></div>
+      </div>
+      <figcaption>feed-projection.ts · dedupe, gap-detect, lane split, wallet header</figcaption>
+    </figure>
+
+    <h3>Dedupe and gap detection</h3>
+    <ul class="facts">
+      <li>Dedupe is on the global <code>id</code>: a reconnect replays a few events the client already has, and <code>seenIds</code> drops them. Returning the same state object lets React skip a re-render. <span class="path">packages/mock-frontend/src/feed-projection.ts</span></li>
+      <li>Gap detection is on <code>seq</code>, not <code>id</code>. The global id legitimately skips inside one run when another run writes, so it can't signal loss. A jump in a source's <code>seq</code> can: seq is contiguous per <code>(run, source)</code>, so a skip records a <code>FeedGap</code>.</li>
+    </ul>
+
+    <h3>Lanes and the wallet header</h3>
+    <ul class="facts">
+      <li><code>eventsForSource</code> filters the feed by <code>source === entrantId</code>, so each lane shows only its own entrant's events. Run-level events use the <code>'run'</code> source.</li>
+      <li><code>describeEvent</code> renders a one-line summary for every known type, and any type the UI doesn't know falls through to <code>rawFallback</code>, which prints the raw payload. The feed never shows a blank row.</li>
+      <li><code>deriveLaneWallet</code> folds a lane's events into its wallet header. The address starts from the run snapshot, then <code>wallet.assigned</code> and <code>funding.balance</code> override it; balance and the funded flag come from the latest <code>funding.balance</code>. <code>awaitingFunds</code> is true while the run is <code>awaiting_funding</code> and this lane is not funded yet.</li>
+    </ul>
+  </section>
+
+  <!-- ============ FLOW 5 ============ -->
+  <section id="flow5">
+    <div class="sec-head">
+      <span class="num">05</span>
+      <h2>How steer works</h2>
+    </div>
+    <p>An operator can inject a free-text turn into a live agent mid-race. If the agent is mid-turn, the steer waits in a queue and lands when the turn ends. If it's idle, it resumes the same harness session inside the same container.</p>
+
+    <figure class="diagram">
+      <div class="pipe">
+        <div class="box gate"><span class="b-title">POST …/steer</span><span class="b-sub">202 accepted</span></div>
+        <span class="arrow">&rarr;</span>
+        <div class="box"><span class="b-title">RunManager.steer</span><span class="b-sub">find entrant</span></div>
+        <span class="arrow">&rarr;</span>
+        <div class="box"><span class="b-title">driver.steer</span><span class="b-sub">check state</span></div>
+      </div>
+      <span class="arrow down">&darr; branch on entrant state</span>
+      <div class="pipe">
+        <div class="box" style="border-color:var(--red);color:var(--red)"><span class="b-title">degraded</span><span class="b-sub">reject, log error</span></div>
+        <div class="box gate"><span class="b-title">turn in flight</span><span class="b-sub">push to queuedSteers</span></div>
+        <div class="box run"><span class="b-title">idle</span><span class="b-sub">resume session now</span></div>
+      </div>
+      <span class="arrow down">&darr; turn ends &rarr; finishTurn drains one queued steer</span>
+      <div class="pipe">
+        <div class="box codex"><span class="b-title">codex exec resume &lt;id&gt;</span></div>
+        <div class="box opencode"><span class="b-title">opencode run -s &lt;id&gt;</span></div>
+        <span class="arrow">&rarr;</span>
+        <div class="box"><span class="b-title">entrant.steered</span><span class="b-sub">event on the lane</span></div>
+      </div>
+      <figcaption>Steer path · server.ts &rarr; run-manager.ts &rarr; harness-driver.ts</figcaption>
+    </figure>
+
+    <ul class="facts">
+      <li><code>POST /runs/:id/entrants/:entrantId/steer</code> takes free text, replies <code>202</code>, and calls <code>RunManager.steer</code>, which looks up the entrant and calls the driver. <span class="path">src/server.ts</span> · <span class="path">src/run-manager.ts</span></li>
+      <li>A degraded entrant rejects the steer: the driver logs an <code>entrant.error</code> and returns. An entrant is stopping rejects too. <span class="path">src/adapters/harness-driver.ts</span> · <code>steer</code></li>
+      <li>If a turn is in flight, the text goes onto <code>queuedSteers</code> and the call returns. When the turn ends, <code>finishTurn</code> shifts one queued steer and starts it as a resume.</li>
+      <li>An idle entrant resumes right away. The resume runs <code>codex exec … resume &lt;sessionId&gt;</code> or <code>opencode run -s &lt;sessionId&gt;</code> in the same container, so the agent keeps its context. A resume before the harness has reported a session id marks the entrant degraded.</li>
+      <li>Each resume appends an <code>entrant.steered</code> event to that entrant's lane, so the steer shows up in the feed.</li>
+    </ul>
+  </section>
+
+  <!-- ============ FILE MAP ============ -->
+  <section id="map">
+    <div class="sec-head">
+      <span class="num">·</span>
+      <h2>File map</h2>
+    </div>
+    <p class="muted">Where each flow lives, for the tour.</p>
+    <table class="map">
+      <thead><tr><th>File</th><th>Owns</th></tr></thead>
+      <tbody>
+        <tr><td><span class="path">src/run-manager.ts</span></td><td>State machine, start/stop, steer entry, opening prompt.</td></tr>
+        <tr><td><span class="path">src/chain/wallet.ts</span></td><td>Burner keys in SQLite: generate, read, export.</td></tr>
+        <tr><td><span class="path">src/chain/funding-gate.ts</span></td><td>Wallet gate + local funding gate (docker-duel only).</td></tr>
+        <tr><td><span class="path">src/chain/funding-watcher.ts</span></td><td>Balance poll at head &minus; confirmations, funding.balance events.</td></tr>
+        <tr><td><span class="path">src/adapters/codex.ts</span></td><td>codex credential dir, env, start/resume argv.</td></tr>
+        <tr><td><span class="path">src/adapters/opencode.ts</span></td><td>opencode key, env scrub, start/resume argv.</td></tr>
+        <tr><td><span class="path">src/adapters/harness-driver.ts</span></td><td>Turn loop, steer queue, degraded state, event append.</td></tr>
+        <tr><td><span class="path">src/runtime/container.ts</span></td><td>Docker container, network, mounts, hardening.</td></tr>
+        <tr><td><span class="path">src/journal.ts</span></td><td>Append-only events: id, per-source seq, subscribe.</td></tr>
+        <tr><td><span class="path">src/server.ts</span></td><td>Fastify routes, SSE replay-then-live.</td></tr>
+        <tr><td><span class="path">packages/mock-frontend/src/feed-projection.ts</span></td><td>Dedupe, gap detect, lane split, wallet header, describeEvent.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    Agents Arena — practice-puzzle arena on a private local chain. Every claim on this page cites the file it came from. Built for the demo; read from the code on 2026-07-23.
+  </div>
+</footer>
+
+</body>
+</html>
