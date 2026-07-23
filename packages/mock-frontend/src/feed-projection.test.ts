@@ -2,13 +2,16 @@ import { describe, expect, it } from 'vitest';
 
 import type { ArenaEvent } from '../../../contract/arena-types';
 import {
+  deriveLaneWallet,
   describeEvent,
   eventsForSource,
+  formatWei,
   gapsForSource,
   ingestEvent,
   initialFeedState,
   isRunLevel,
   RUN_SOURCE,
+  truncateAddress,
   type FeedState,
 } from './feed-projection';
 
@@ -149,5 +152,72 @@ describe('describeEvent — all 14 contract types render', () => {
     const line = describeEvent(unknown);
     expect(line).toContain('future.type');
     expect(line).toContain('foo');
+  });
+});
+
+describe('truncateAddress', () => {
+  it('middle-truncates a full hex address', () => {
+    expect(truncateAddress('0x1234567890abcdef1234567890abcdef12345678')).toBe('0x1234…5678');
+  });
+
+  it('leaves a string too short to truncate unchanged', () => {
+    expect(truncateAddress('0x1234abcd')).toBe('0x1234abcd');
+  });
+});
+
+describe('formatWei', () => {
+  it('formats one ether as a whole number', () => {
+    expect(formatWei('1000000000000000000')).toBe('1');
+  });
+
+  it('formats a fractional balance and trims trailing zeros', () => {
+    expect(formatWei('500000000000000000')).toBe('0.5');
+  });
+
+  it('caps at four decimal places (truncates, does not round)', () => {
+    expect(formatWei('123450000000000000')).toBe('0.1234');
+  });
+
+  it('formats zero and sub-0.0001 dust as 0', () => {
+    expect(formatWei('0')).toBe('0');
+    expect(formatWei('100')).toBe('0');
+  });
+
+  it('handles balances above one ether', () => {
+    expect(formatWei('12500000000000000000')).toBe('12.5');
+  });
+});
+
+describe('deriveLaneWallet', () => {
+  const base = { id: 1, runId: 'run-1', source: 'codex-1', seq: 1, ts: 'now' };
+
+  it('falls back to the snapshot address when no wallet events arrived', () => {
+    expect(deriveLaneWallet([], '0xsnapshot', 'preparing')).toEqual({
+      address: '0xsnapshot',
+      wei: null,
+      funded: false,
+      awaitingFunds: false,
+    });
+  });
+
+  it('marks awaiting funds while the run awaits funding and the lane is unfunded', () => {
+    const wallet = deriveLaneWallet([], '0xsnapshot', 'awaiting_funding');
+    expect(wallet.awaitingFunds).toBe(true);
+  });
+
+  it('takes the address from a wallet.assigned event over the snapshot', () => {
+    const events: ArenaEvent[] = [
+      { ...base, type: 'wallet.assigned', payload: { entrantId: 'codex-1', address: '0xassigned' } },
+    ];
+    expect(deriveLaneWallet(events, null, 'preparing').address).toBe('0xassigned');
+  });
+
+  it('uses the latest funding.balance for wei and funded, and stops awaiting once funded', () => {
+    const events: ArenaEvent[] = [
+      { ...base, id: 1, seq: 1, type: 'funding.balance', payload: { entrantId: 'codex-1', address: '0xw', wei: '10', funded: false } },
+      { ...base, id: 2, seq: 2, type: 'funding.balance', payload: { entrantId: 'codex-1', address: '0xw', wei: '1000000000000000000', funded: true } },
+    ];
+    const wallet = deriveLaneWallet(events, null, 'awaiting_funding');
+    expect(wallet).toEqual({ address: '0xw', wei: '1000000000000000000', funded: true, awaitingFunds: false });
   });
 });

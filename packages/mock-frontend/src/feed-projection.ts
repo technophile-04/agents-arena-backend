@@ -1,4 +1,4 @@
-import type { ArenaEvent } from '../../../contract/arena-types';
+import type { ArenaEvent, RunState } from '../../../contract/arena-types';
 
 // The global `id` is a journal-wide autoincrement shared across runs, so within
 // one run it legitimately skips whenever another run writes events. Data loss is
@@ -63,6 +63,57 @@ export function gapsForSource(gaps: FeedGap[], source: string): FeedGap[] {
   return gaps.filter((gap) => gap.source === source);
 }
 
+// ---- wallet / funding derivation ----
+
+export interface LaneWalletState {
+  address: string | null; // resolved burner address, snapshot or wallet.assigned
+  wei: string | null; // latest funding.balance wei, null before any balance event
+  funded: boolean; // latest funding.balance funded flag
+  awaitingFunds: boolean; // run is awaiting_funding and this lane is not funded yet
+}
+
+// Middle-truncate a hex address for display: 0x1234…abcd. The caller keeps the
+// full address in a title attribute. Short strings pass through unchanged.
+export function truncateAddress(address: string, lead = 6, tail = 4): string {
+  if (address.length <= lead + tail + 1) return address;
+  return `${address.slice(0, lead)}…${address.slice(-tail)}`;
+}
+
+// Convert a wei integer decimal string to an ETH string, 4 decimal places max,
+// trailing zeros trimmed. Dependency-free: BigInt-safe via plain string maths.
+export function formatWei(wei: string): string {
+  const negative = wei.startsWith('-');
+  const digits = (negative ? wei.slice(1) : wei).replace(/^0+(?=\d)/, '');
+  const padded = digits.padStart(19, '0'); // 18 fractional digits + >=1 integer digit
+  const intPart = padded.slice(0, padded.length - 18);
+  const frac = padded.slice(padded.length - 18, padded.length - 18 + 4).replace(/0+$/, '');
+  const sign = negative ? '-' : '';
+  return frac ? `${sign}${intPart}.${frac}` : `${sign}${intPart}`;
+}
+
+// Fold a lane's events into its wallet view. The address falls back to the
+// snapshot value, then the latest wallet.assigned / funding.balance overrides it.
+// Balance and funded come from the latest funding.balance event for the lane.
+export function deriveLaneWallet(
+  laneEvents: ArenaEvent[],
+  fallbackAddress: string | null,
+  runState: RunState | undefined,
+): LaneWalletState {
+  let address = fallbackAddress;
+  let wei: string | null = null;
+  let funded = false;
+  for (const event of laneEvents) {
+    if (event.type === 'wallet.assigned') {
+      address = event.payload.address;
+    } else if (event.type === 'funding.balance') {
+      address = event.payload.address;
+      wei = event.payload.wei;
+      funded = event.payload.funded;
+    }
+  }
+  return { address, wei, funded, awaitingFunds: runState === 'awaiting_funding' && !funded };
+}
+
 // One-line human summary for every ArenaEvent type. Any type the UI does not
 // know renders through the raw fallback so the feed never blanks out.
 export function describeEvent(event: ArenaEvent): string {
@@ -88,7 +139,7 @@ export function describeEvent(event: ArenaEvent): string {
     case 'wallet.assigned':
       return `wallet ${event.payload.address}`;
     case 'funding.balance':
-      return `balance ${event.payload.wei} wei${event.payload.funded ? ' (funded)' : ''}`;
+      return `balance ${formatWei(event.payload.wei)} eth${event.payload.funded ? ' (funded)' : ''}`;
     case 'score.flag':
       return `flag challenge ${event.payload.challengeId} token ${event.payload.tokenId} (${event.payload.txHash})`;
     case 'entrant.error':

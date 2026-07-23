@@ -2,15 +2,18 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
-import type { ArenaEvent, EntrantSummary, RunSnapshot } from '../../../contract/arena-types';
+import type { ArenaEvent, EntrantSummary, RunSnapshot, RunState } from '../../../contract/arena-types';
 import { projectSnapshot } from './project-snapshot';
 import {
+  deriveLaneWallet,
   describeEvent,
   eventsForSource,
+  formatWei,
   gapsForSource,
   ingestEvent,
   initialFeedState,
   RUN_SOURCE,
+  truncateAddress,
   type FeedState,
 } from './feed-projection';
 import { runPhase, styleForEvent, totalUsage } from './event-style';
@@ -146,13 +149,13 @@ function App() {
         </div>
       ) : (
         <section className="scoreboard">
-          <EntrantLane runId={run.id} entrant={entrants[0]} feed={feed} side="left" />
+          <EntrantLane runId={run.id} entrant={entrants[0]} feed={feed} runState={run.state} side="left" />
           <div className="rail">
             <span className="vs">vs</span>
             <span className="lead">{leadLabel(entrants)}</span>
             <span className="rail-line" />
           </div>
-          <EntrantLane runId={run.id} entrant={entrants[1]} feed={feed} side="right" />
+          <EntrantLane runId={run.id} entrant={entrants[1]} feed={feed} runState={run.state} side="right" />
         </section>
       )}
 
@@ -190,10 +193,11 @@ function FeedRow({ event }: { event: ArenaEvent }) {
   );
 }
 
-function EntrantLane({ runId, entrant, feed, side }: {
+function EntrantLane({ runId, entrant, feed, runState, side }: {
   runId: string;
   entrant: EntrantSummary | undefined;
   feed: FeedState;
+  runState: RunState;
   side: 'left' | 'right';
 }) {
   const [text, setText] = useState('');
@@ -217,6 +221,10 @@ function EntrantLane({ runId, entrant, feed, side }: {
     [entrant, feed.gaps],
   );
   const usage = useMemo(() => totalUsage(laneEvents), [laneEvents]);
+  const wallet = useMemo(
+    () => deriveLaneWallet(laneEvents, entrant?.address ?? null, runState),
+    [laneEvents, entrant?.address, runState],
+  );
 
   if (!entrant) return <div className="lane" />;
   const laneColor = HARNESS_COLOR[entrant.harness] ?? 'var(--muted)';
@@ -231,6 +239,21 @@ function EntrantLane({ runId, entrant, feed, side }: {
         <span className="lane-harness">{entrant.harness}</span>
       </div>
       <p className="lane-model">{entrant.model}</p>
+
+      {wallet.address !== null ? (
+        <div className="lane-wallet" data-testid={`lane-wallet-${entrant.id}`}>
+          <span className="wallet-addr" title={wallet.address}>{truncateAddress(wallet.address)}</span>
+          {wallet.funded ? (
+            <span className="wallet-fund funded" data-testid={`lane-fund-${entrant.id}`}>
+              funded{wallet.wei !== null ? ` · ${formatWei(wallet.wei)} eth` : ''}
+            </span>
+          ) : wallet.wei !== null ? (
+            <span className="wallet-fund" data-testid={`lane-fund-${entrant.id}`}>{formatWei(wallet.wei)} eth</span>
+          ) : wallet.awaitingFunds ? (
+            <span className="wallet-fund awaiting" data-testid={`lane-fund-${entrant.id}`}>awaiting funds</span>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="lane-stats">
         <span className="stat">
