@@ -2,6 +2,10 @@
 
 set -Eeuo pipefail
 
+# The arena repo pins packageManager=pnpm, which makes strict corepack refuse
+# to run the yarn shim from this cwd. The chain repo genuinely uses yarn.
+export COREPACK_ENABLE_STRICT=0
+
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 readonly DEMO_DIR="$ROOT_DIR/.demo"
