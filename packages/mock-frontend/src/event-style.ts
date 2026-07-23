@@ -36,6 +36,8 @@ export function styleForEvent(event: ArenaEvent): EventStyle {
       return { tone: event.payload.ok ? 'tool' : 'tool-fail', tag: 'result' };
     case 'entrant.steered':
       return { tone: 'steer', tag: 'steer' };
+    case 'entrant.prompt':
+      return { tone: 'steer', tag: 'task' };
     case 'entrant.nudged':
       return { tone: 'steer', tag: 'nudge' };
     case 'wallet.assigned':

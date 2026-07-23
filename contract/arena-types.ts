@@ -47,6 +47,7 @@ export type ArenaEvent =
   | (ArenaEventBase & { type: 'tool.call'; payload: { entrantId: string; tool: string; detail: string } })
   | (ArenaEventBase & { type: 'tool.result'; payload: { entrantId: string; tool: string; ok: boolean; detail: string } })
   | (ArenaEventBase & { type: 'entrant.steered'; payload: { entrantId: string; text: string } })
+  | (ArenaEventBase & { type: 'entrant.prompt'; payload: { entrantId: string; text: string } })
   | (ArenaEventBase & { type: 'entrant.nudged'; payload: { entrantId: string; text: string; flags: number } })
   | (ArenaEventBase & { type: 'wallet.assigned'; payload: { entrantId: string; address: string } })
   | (ArenaEventBase & { type: 'funding.balance'; payload: { entrantId: string; address: string; wei: string; funded: boolean } })

@@ -81,6 +81,8 @@ export function describeEvent(event: ArenaEvent): string {
       return `${event.payload.tool} → ${event.payload.ok ? 'ok' : 'fail'}: ${event.payload.detail}`;
     case 'entrant.steered':
       return `steered: ${event.payload.text}`;
+    case 'entrant.prompt':
+      return `task: ${event.payload.text}`;
     case 'entrant.nudged':
       return `nudged (flags ${event.payload.flags}): ${event.payload.text}`;
     case 'wallet.assigned':

@@ -21,6 +21,7 @@ const eventTypes = [
   'tool.call',
   'tool.result',
   'entrant.steered',
+  'entrant.prompt',
   'entrant.nudged',
   'wallet.assigned',
   'funding.balance',

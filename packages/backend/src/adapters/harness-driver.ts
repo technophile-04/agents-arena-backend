@@ -183,6 +183,11 @@ export abstract class HarnessEntrantDriver implements EntrantDriver {
           entrantId: state.entrant.id,
           text,
         });
+      } else {
+        this.journal.append(state.run.id, state.entrant.id, 'entrant.prompt', {
+          entrantId: state.entrant.id,
+          text,
+        });
       }
       resolveInjected();
 
