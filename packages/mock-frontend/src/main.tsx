@@ -193,6 +193,27 @@ function FeedRow({ event }: { event: ArenaEvent }) {
   );
 }
 
+function WalletAddress({ address }: { address: string }) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(false), 1400);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
+  return (
+    <button
+      type="button"
+      className={copied ? 'wallet-addr copied' : 'wallet-addr'}
+      title={copied ? 'copied' : `${address} · click to copy`}
+      onClick={() => {
+        void navigator.clipboard.writeText(address).then(() => setCopied(true));
+      }}
+    >
+      {copied ? 'copied ✓' : truncateAddress(address)}
+    </button>
+  );
+}
+
 function EntrantLane({ runId, entrant, feed, runState, side }: {
   runId: string;
   entrant: EntrantSummary | undefined;
@@ -242,7 +263,7 @@ function EntrantLane({ runId, entrant, feed, runState, side }: {
 
       {wallet.address !== null ? (
         <div className="lane-wallet" data-testid={`lane-wallet-${entrant.id}`}>
-          <span className="wallet-addr" title={wallet.address}>{truncateAddress(wallet.address)}</span>
+          <WalletAddress address={wallet.address} />
           {wallet.funded ? (
             <span className="wallet-fund funded" data-testid={`lane-fund-${entrant.id}`}>
               funded{wallet.wei !== null ? ` · ${formatWei(wallet.wei)} eth` : ''}
