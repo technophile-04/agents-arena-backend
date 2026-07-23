@@ -4,7 +4,7 @@ Read the [README](README.md) for the API and project details.
 
 ## Prerequisites
 
-Set `AI_CTF_REPO` to your local ai-ctf checkout.
+Set `AI_CTF_REPO` to your local checkout of [ai.ctf.buidlguidl.com](https://github.com/BuidlGuidl/ai.ctf.buidlguidl.com).
 
 - `docker info`
 - `docker image inspect arena-entrant:dev`
