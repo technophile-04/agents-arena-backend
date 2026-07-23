@@ -4,6 +4,7 @@ import { join } from 'node:path';
 
 import type { EventJournal } from '../journal.js';
 import type { EntrantContainer } from '../runtime/container.js';
+import { getWallet } from '../chain/wallet.js';
 import { CodexEventParser } from './codex-parser.js';
 import {
   HarnessEntrantDriver,
@@ -37,6 +38,7 @@ export class CodexDriver extends HarnessEntrantDriver {
   protected async createContainer(run: RunRecord, entrant: EntrantRecord): Promise<EntrantContainer> {
     const credentialDir = await createCredentialDir('codex');
     try {
+      const wallet = getWallet(run.id, entrant.id, this.journal.database);
       await copyFile(this.authPath, join(credentialDir, 'auth.json'));
       // Only pin a model when the preset asks for a specific one. A ChatGPT-account
       // login rejects API-only models (gpt-5, gpt-5-codex) with a 400, so 'default'
@@ -52,7 +54,16 @@ export class CodexDriver extends HarnessEntrantDriver {
         entrantId: entrant.id,
         credentialDir,
         credentialTarget: '/creds/codex',
-        env: { CODEX_HOME: '/creds/codex' },
+        env: {
+          CODEX_HOME: '/creds/codex',
+          ETH_RPC_URL: this.rpcUrl,
+          ...(wallet === null
+            ? {}
+            : {
+              WALLET_ADDRESS: wallet.address,
+              WALLET_PRIVATE_KEY: wallet.privateKey,
+            }),
+        },
       });
     } catch (error) {
       await rm(credentialDir, { recursive: true, force: true });

@@ -2,7 +2,13 @@ import { describe, expect, it } from 'vitest';
 
 import type { EntrantDriver } from '../src/adapters/types.js';
 import { EventJournal } from '../src/journal.js';
-import { InvalidTransitionError, LEGAL_TRANSITIONS, RunManager } from '../src/run-manager.js';
+import {
+  InvalidTransitionError,
+  LEGAL_TRANSITIONS,
+  passThroughWalletGate,
+  RunManager,
+  type WalletGate,
+} from '../src/run-manager.js';
 import type { RunState } from '../src/contract.js';
 
 const noopDriver: EntrantDriver = {
@@ -131,6 +137,50 @@ async function waitFor(check: () => boolean): Promise<void> {
 }
 
 describe('RunManager ready barrier', () => {
+  it('runs the wallet gate after preparing state and before driver.prepare', async () => {
+    const journal = new EventJournal(':memory:');
+    const calls: string[] = [];
+    const driver: EntrantDriver = {
+      async prepare() {
+        calls.push('prepare');
+      },
+      async start() {},
+      async steer() {},
+      async stop() {},
+    };
+    const walletGate: WalletGate = async (run) => {
+      calls.push(`wallet:${run.state}`);
+      const stateEvents = journal.after(run.id, 0).filter((event) => event.type === 'run.state');
+      expect(stateEvents.at(-1)?.payload.state).toBe('preparing');
+    };
+    const manager = new RunManager(journal, driver, undefined, { walletGate });
+    try {
+      const { run } = await manager.create({ preset: 'docker-duel' });
+      await manager.start(run.id);
+
+      expect(calls[0]).toBe('wallet:preparing');
+      expect(calls.slice(1)).toEqual(['prepare', 'prepare']);
+    } finally {
+      journal.close();
+    }
+  });
+
+  it('leaves entrants unchanged with the default wallet gate', async () => {
+    const journal = new EventJournal(':memory:');
+    const manager = new RunManager(journal, noopDriver, undefined, {
+      walletGate: passThroughWalletGate,
+    });
+    try {
+      const { run } = await manager.create({ preset: 'docker-duel' });
+      await manager.start(run.id);
+
+      expect(manager.snapshot(run.id).entrants.map((entrant) => entrant.address)).toEqual([null, null]);
+      expect(journal.after(run.id, 0).filter((event) => event.type === 'wallet.assigned')).toEqual([]);
+    } finally {
+      journal.close();
+    }
+  });
+
   it('shares one in-flight start between concurrent callers', async () => {
     const journal = new EventJournal(':memory:');
     const driver = new BarrierDriver();

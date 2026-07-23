@@ -1,7 +1,12 @@
+import { createLocalFundingGate, createWalletGate } from './chain/funding-gate.js';
 import { createServer } from './server.js';
 
 const port = Number(process.env.PORT ?? 4177);
-const { app } = createServer({ logger: true });
+const { app } = createServer({
+  logger: true,
+  walletGateFactory: (journal) => createWalletGate(journal),
+  fundingGateFactory: (journal) => createLocalFundingGate(journal),
+});
 
 await app.listen({ port, host: '127.0.0.1' });
 

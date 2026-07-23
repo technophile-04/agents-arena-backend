@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { CodexDriver } from '../src/adapters/codex.js';
 import { OpenCodeDriver, scrubOpenCodeEnvironment } from '../src/adapters/opencode.js';
 import type { EntrantDriver, EntrantRecord, RunRecord } from '../src/adapters/types.js';
+import { createWallet, getWallet } from '../src/chain/wallet.js';
 import { entrants, runs } from '../src/db/schema.js';
 import { EventJournal } from '../src/journal.js';
 import { RunManager } from '../src/run-manager.js';
@@ -104,12 +105,17 @@ class ControlledContainer implements EntrantContainer {
   }
 }
 
-async function setup(harness: 'codex' | 'opencode', watchdogMs = 10 * 60 * 1_000): Promise<{
+async function setup(
+  harness: 'codex' | 'opencode',
+  watchdogMs = 10 * 60 * 1_000,
+  withWallet = false,
+): Promise<{
   journal: EventJournal;
   driver: EntrantDriver;
   run: RunRecord;
   entrant: EntrantRecord;
   container: ControlledContainer;
+  containerOptions: ContainerOptions;
 }> {
   const journal = new EventJournal(':memory:');
   const seedDriver: EntrantDriver = {
@@ -123,9 +129,14 @@ async function setup(harness: 'codex' | 'opencode', watchdogMs = 10 * 60 * 1_000
     eq(entrants.harness, harness),
   )).get();
   if (run === undefined || entrant === undefined) throw new Error('Test run was not seeded');
+  if (withWallet) {
+    createWallet(run.id, entrant.id, journal.database);
+  }
 
   const container = new ControlledContainer();
+  let containerOptions: ContainerOptions | undefined;
   const containerFactory: ContainerFactory = async (options: ContainerOptions) => {
+    containerOptions = options;
     if (options.credentialDir !== undefined) temporaryPaths.push(options.credentialDir);
     return container;
   };
@@ -144,7 +155,10 @@ async function setup(harness: 'codex' | 'opencode', watchdogMs = 10 * 60 * 1_000
     });
   }
   await driver.prepare(run, entrant);
-  return { journal, driver, run, entrant, container };
+  if (containerOptions === undefined) {
+    throw new Error('Container factory was not called');
+  }
+  return { journal, driver, run, entrant, container, containerOptions };
 }
 
 async function waitFor(check: () => boolean): Promise<void> {
@@ -211,6 +225,36 @@ describe.each(['codex', 'opencode'] as const)('%s steer queue', (harness) => {
 });
 
 describe('adapter guardrails', () => {
+  it.each(['codex', 'opencode'] as const)('%s always injects ETH_RPC_URL into the container', async (harness) => {
+    const context = await setup(harness);
+    try {
+      expect(context.containerOptions.env).toEqual(expect.objectContaining({
+        ETH_RPC_URL: 'http://host.docker.internal:8545',
+      }));
+      expect(context.containerOptions.env).not.toHaveProperty('WALLET_ADDRESS');
+      expect(context.containerOptions.env).not.toHaveProperty('WALLET_PRIVATE_KEY');
+    } finally {
+      await context.driver.stop(context.run, context.entrant);
+      context.journal.close();
+    }
+  });
+
+  it.each(['codex', 'opencode'] as const)('%s injects wallet credentials when a wallet row exists', async (harness) => {
+    const context = await setup(harness, 10 * 60 * 1_000, true);
+    try {
+      const wallet = getWallet(context.run.id, context.entrant.id, context.journal.database);
+      expect(wallet).not.toBeNull();
+      expect(context.containerOptions.env).toEqual(expect.objectContaining({
+        ETH_RPC_URL: 'http://host.docker.internal:8545',
+        WALLET_ADDRESS: wallet?.address,
+        WALLET_PRIVATE_KEY: wallet?.privateKey,
+      }));
+    } finally {
+      await context.driver.stop(context.run, context.entrant);
+      context.journal.close();
+    }
+  });
+
   it('blocks Codex when resume returns a different thread ID', async () => {
     const context = await setup('codex');
     try {

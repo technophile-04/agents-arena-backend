@@ -103,7 +103,7 @@ export async function awaitFunding({
         const key = `${entry.entrantId}:${entry.address.toLowerCase()}`;
         if (observed.get(key) !== balance) {
           observed.set(key, balance);
-          journal.append(runId, 'chain:funding', 'funding.balance', {
+          journal.append(runId, entry.entrantId, 'funding.balance', {
             entrantId: entry.entrantId,
             address: entry.address,
             wei: balance.toString(),

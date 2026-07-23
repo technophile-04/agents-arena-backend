@@ -4,6 +4,7 @@ import { join } from 'node:path';
 
 import type { EventJournal } from '../journal.js';
 import type { EntrantContainer } from '../runtime/container.js';
+import { getWallet } from '../chain/wallet.js';
 import {
   HarnessEntrantDriver,
   type HarnessDriverOptions,
@@ -44,6 +45,7 @@ export class OpenCodeDriver extends HarnessEntrantDriver {
     const credentialDir = await mkdtemp(join(tmpdir(), 'arena-opencode-'));
     await chmod(credentialDir, 0o755);
     try {
+      const wallet = getWallet(run.id, entrant.id, this.journal.database);
       const apiKey = this.apiKey ?? await readOpenRouterKey(this.authPath);
       if (apiKey === undefined || apiKey.length === 0) {
         throw new Error(`OpenRouter API key not found in OPENROUTER_API_KEY or ${this.authPath}`);
@@ -53,7 +55,16 @@ export class OpenCodeDriver extends HarnessEntrantDriver {
         entrantId: entrant.id,
         credentialDir,
         credentialTarget: '/creds/opencode',
-        env: scrubOpenCodeEnvironment({ OPENROUTER_API_KEY: apiKey }),
+        env: scrubOpenCodeEnvironment({
+          OPENROUTER_API_KEY: apiKey,
+          ETH_RPC_URL: this.rpcUrl,
+          ...(wallet === null
+            ? {}
+            : {
+              WALLET_ADDRESS: wallet.address,
+              WALLET_PRIVATE_KEY: wallet.privateKey,
+            }),
+        }),
       });
     } catch (error) {
       await rm(credentialDir, { recursive: true, force: true });

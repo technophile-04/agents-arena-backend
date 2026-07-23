@@ -15,7 +15,10 @@ function fundingEvents(journal: EventJournal, runId: string) {
   return journal
     .after(runId, 0)
     .filter((event) => event.type === 'funding.balance')
-    .map((event) => event.payload as { funded: boolean; wei: string; entrantId: string });
+    .map((event) => ({
+      source: event.source,
+      ...(event.payload as { funded: boolean; wei: string; entrantId: string }),
+    }));
 }
 
 describe('funding watcher', () => {
@@ -105,6 +108,7 @@ describe('funding watcher', () => {
       expect(events).toHaveLength(2);
       expect(events[0]?.funded).toBe(false);
       expect(events[1]?.funded).toBe(true);
+      expect(events[1]?.source).toBe('e1');
       expect(events[1]?.wei).toBe(parseEther('3').toString());
     } finally {
       controller.abort();

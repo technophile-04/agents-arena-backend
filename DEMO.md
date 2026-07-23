@@ -63,6 +63,11 @@ Create the Docker duel:
 ./scripts/demo.sh real
 ```
 
+During startup the backend assigns each entrant a burner wallet, injects the
+private key and chain RPC URL into its container, and self-funds both burners on
+the local chain profile. The run stays in `awaiting_funding` until both balances
+clear the local threshold, then it moves to ready and starts both entrants.
+
 Open the printed frontend URL. The Codex and OpenCode lanes enter the ready
 barrier, start together, and stream their status and tool events into the run log.
 
@@ -84,6 +89,16 @@ processes after the demo:
 ```
 
 ## Troubleshooting
+
+**Funding diagnostic.**
+The standalone funding drill still exists for watcher checks:
+
+```bash
+fnm exec --using=22.20.0 pnpm --filter backend exec tsx scripts/demo-funding.ts
+```
+
+Run `scripts/fund-drill.sh` in another terminal when the drill prints the burner
+addresses. The drill does not start a duel.
 
 Failures hit and fixed during the launcher's verification run. Each fix is confirmed.
 

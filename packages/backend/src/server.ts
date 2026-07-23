@@ -7,11 +7,13 @@ import { RegisteredEntrantDriver } from './adapters/registered.js';
 import type { EntrantDriver } from './adapters/types.js';
 import { EventJournal } from './journal.js';
 import {
+  type FundingGate,
   EntrantNotFoundError,
   InvalidTransitionError,
   RunManager,
   RunNotFoundError,
   UnknownPresetError,
+  type WalletGate,
 } from './run-manager.js';
 
 const createRunSchema = z.object({
@@ -27,6 +29,8 @@ export interface ServerOptions {
   dbPath?: string;
   schedule?: Schedule;
   driverFactory?: (journal: EventJournal) => EntrantDriver;
+  walletGateFactory?: (journal: EventJournal) => WalletGate;
+  fundingGateFactory?: (journal: EventJournal) => FundingGate;
   logger?: boolean;
 }
 
@@ -40,7 +44,15 @@ export function createServer(options: ServerOptions = {}): ArenaServer {
   const app = Fastify({ logger: options.logger ?? false });
   const journal = new EventJournal(options.dbPath);
   const driver = options.driverFactory?.(journal) ?? new RegisteredEntrantDriver(journal, options.schedule);
-  const manager = new RunManager(journal, driver);
+  const runManagerOptions = options.walletGateFactory === undefined
+    ? {}
+    : { walletGate: options.walletGateFactory(journal) };
+  const manager = new RunManager(
+    journal,
+    driver,
+    options.fundingGateFactory?.(journal),
+    runManagerOptions,
+  );
 
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof RunNotFoundError || error instanceof EntrantNotFoundError) {

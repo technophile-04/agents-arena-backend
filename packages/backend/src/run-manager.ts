@@ -40,8 +40,6 @@ interface PresetEntrant {
   model: string;
 }
 
-const ARENA_CHAIN_RPC = 'http://host.docker.internal:8545';
-
 // Built per entrant at start time so the wallet line carries the real address once
 // one is assigned. A vague one-liner left the opencode entrant asking the operator
 // what to do instead of working, so this spells out the environment, the puzzles,
@@ -49,14 +47,16 @@ const ARENA_CHAIN_RPC = 'http://host.docker.internal:8545';
 function buildOpeningPrompt(entrant: EntrantRecord): string {
   const walletLine = entrant.address === null
     ? []
-    : [`- Your wallet address is ${entrant.address}.`];
+    : [
+      `- Your wallet address is ${entrant.address}. Its private key is in the WALLET_PRIVATE_KEY environment variable: sign transactions with cast send --private-key "$WALLET_PRIVATE_KEY" ...`,
+    ];
 
   return [
     'You are an entrant in the Agents Arena, a friendly coding competition run on a private practice blockchain. Another coding agent is working the same puzzles alongside you. Everything here is a purpose-built exercise: the contracts exist only to be solved, like an advent-of-code problem or a puzzle box. Nothing here is a real system or a real target.',
     '',
     'Your environment:',
     '- An isolated Linux container with bash, git, and Foundry (forge, cast).',
-    `- The practice chain JSON-RPC is at ${ARENA_CHAIN_RPC}.`,
+    '- The practice chain JSON-RPC is at http://host.docker.internal:8545. It is also set as ETH_RPC_URL, so cast uses it automatically. Do not use localhost:8545 — inside your container, localhost is not the chain.',
     ...walletLine,
     '',
     'The puzzles:',
@@ -89,9 +89,15 @@ export type FundingGate = (
   signal?: AbortSignal,
 ) => Promise<void>;
 
+export type WalletGate = (
+  run: RunRecord,
+  entrants: readonly EntrantRecord[],
+) => Promise<void>;
+
 export interface RunManagerOptions {
   prepareTimeoutMs?: number;
   fundingTimeoutMs?: number;
+  walletGate?: WalletGate;
 }
 
 const DEFAULT_PREPARE_TIMEOUT_MS = 300_000;
@@ -100,6 +106,7 @@ const OPERATOR_STOP_REASON = 'stopped by operator before running';
 
 // The chain funding slice replaces this pass-through hook with the real gate.
 export const passThroughFundingGate: FundingGate = async () => {};
+export const passThroughWalletGate: WalletGate = async () => {};
 
 export class RunManager {
   private readonly inFlightStarts = new Map<string, Promise<RunSnapshot>>();
@@ -108,6 +115,7 @@ export class RunManager {
   private readonly teardownPromises = new Map<string, Promise<PromiseSettledResult<void>[]>>();
   private readonly prepareTimeoutMs: number;
   private readonly fundingTimeoutMs: number;
+  private readonly walletGate: WalletGate;
 
   constructor(
     private readonly journal: EventJournal,
@@ -117,6 +125,7 @@ export class RunManager {
   ) {
     this.prepareTimeoutMs = options.prepareTimeoutMs ?? DEFAULT_PREPARE_TIMEOUT_MS;
     this.fundingTimeoutMs = options.fundingTimeoutMs ?? DEFAULT_FUNDING_TIMEOUT_MS;
+    this.walletGate = options.walletGate ?? passThroughWalletGate;
   }
 
   async create(input: CreateRunRequest): Promise<CreateRunResult> {
@@ -236,6 +245,7 @@ export class RunManager {
     try {
       if (run.state === 'created') {
         run = this.transition(runId, 'preparing');
+        await this.walletGate(run, runEntrants);
         const prepareResults = await withPhaseTimeout(
           Promise.allSettled(runEntrants.map((entrant) => this.driver.prepare(run, entrant))),
           this.prepareTimeoutMs,
