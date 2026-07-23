@@ -1,0 +1,33 @@
+# Agents Arena — glossary
+
+canonical vocabulary for the arena backend. terms only, no implementation. built during the design session on 2026-07-22.
+
+## core terms
+
+- **arena backend** — the one authoritative server that owns a run: lifecycle, containers, credentials, the event journal, and score state. the mock frontend and damu/pablo's real frontend are clients, never a second source of truth.
+- **run** — one race instance. has a lifecycle state, a fixed set of entrants, one canonical start time, and a deadline. created from a preset.
+- **preset** — the server-side definition of a run: which harnesses, pinned models, prompt, tool policy, wallet fixtures, time limit. the frontend sends a preset name plus `autoStart`, never raw config.
+- **entrant** — one competitor in a run: a harness + pinned model + funded wallet + erc-8004 identity + private credential home, running in its own container. the compared unit is the harness together with its model, not the model alone.
+- **harness** — a coding-agent CLI: Claude Code, Codex, or OpenCode later. each is wrapped by an adapter.
+- **entrant session** — the long-lived, steerable harness conversation for one entrant. NOT a one-shot process. the runner injects turns into it: the opening prompt, an auto-nudge, or an Austin steer. survives across nudges, keeping the agent's memory of what it already tried.
+- **turn injection** — feeding a user message into a live entrant session. three sources, one mechanism: opening prompt, auto-nudge, Austin steer.
+- **auto-nudge** — a turn the arena injects on its own when an entrant goes idle before the deadline while holding fewer than 12 flags. built from on-chain truth (flags the wallet actually minted), so a hallucinated "I'm done" gets corrected by reality.
+- **Austin steer** — a free-text turn Austin types mid-race, targeted at one entrant or both, appended to the session like any user turn. the live-caster intervention.
+- **arena-runner** — the container entrypoint process. holds the entrant session, waits behind the ready barrier, injects turns, forwards structured output, terminates at the deadline. it is PID 1's real work, not a `docker exec`.
+- **harness adapter** — the seam that hides harness-specific details. owns the CLI command, credential home, preflight, raw-event parser, and mapping into `ArenaEvent`. the run lifecycle only knows: prepare, report ready, start, steer, stop, emit events.
+- **arena event** — one normalized, journaled fact about a run: an agent message, tool call, command, file change, transaction, score, nudge, steer, error, or usage line. the public unit of the feed.
+- **event journal** — the append-only store of arena events (SQLite). one global id, stable per-source seq, replayable after `Last-Event-ID`.
+- **game-state adapter** — watches Base for `FlagMinted`, maps wallet → entrant, projects confirmed flags into the journal as score events. the only judge; there is no off-chain answer.
+- **flag** — an nft minted on-chain when an entrant solves a challenge. the atomic scoring unit. 12 exist; flag #1 (register) is mandatory and gates the rest.
+- **ready barrier** — the hold point. both entrants must report READY before either receives the opening prompt, so container boot time never decides the race.
+- **chain profile** — the swappable bundle that points the arena at a chain: `{ rpcUrl, chainId, nftFlags, challenge1, identityRegistry }`. local (the ai-ctf repo `yarn chain`) is one profile, real Base another. only addresses + RPC differ; runner, watcher, and adapters don't change. also the switch between "clean benchmark" (fresh local deploy, no shared state) and "live shared board."
+- **funding gate** — the `awaiting_funding` hold where the run waits for each entrant's wallet balance to cross a threshold. one mechanism serves both the live-event moment (Austin funds from the BuidlGuidl treasury on stream) and rehearsal (an optional operator key auto-funds).
+
+## state vocabulary
+
+per-entrant lifecycle, distinct from run state:
+
+- **working** — the session is actively producing output.
+- **idle** — the session settled with no pending turn. triggers auto-nudge if flags < 12 and time remains.
+- **blocked** — the session is waiting on an approval/permission prompt. under the `dontAsk` policy this should never happen; if it does, it's a policy bug to surface.
+- **done** — finished AND the arena has consumed the exit (checked flag count, decided not to nudge). a process exiting is NOT the entrant being done.

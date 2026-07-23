@@ -4,12 +4,14 @@ Read the [README](README.md) for the API and project details.
 
 ## Prerequisites
 
+Set `AI_CTF_REPO` to your local ai-ctf checkout.
+
 - `docker info`
 - `docker image inspect arena-entrant:dev`
 - `fnm exec --using=22.20.0 node --version`
 - `fnm exec --using=22.20.0 pnpm --version`
 - `fnm exec --using=22.20.0 yarn --version`
-- `test -f /Users/shivbhonde/Desktop/github/ai.ctf.buidlguidl.com/package.json`
+- `test -f "$AI_CTF_REPO/package.json"`
 - `test -f ~/.codex/auth.json`
 - `test -n "$OPENROUTER_API_KEY"`
 
@@ -97,10 +99,10 @@ The standalone funding drill still exists for watcher checks:
 fnm exec --using=22.20.0 pnpm --filter backend exec tsx scripts/demo-funding.ts
 ```
 
-Run `scripts/fund-drill.sh` in another terminal when the drill prints the burner
+Run `packages/backend/scripts/fund-drill.sh` in another terminal when the drill prints the burner
 addresses. The drill does not start a duel.
 
-Failures hit and fixed during the launcher's verification run. Each fix is confirmed.
+Problems seen during setup and their fixes:
 
 **Backend tests or server crash with a `NODE_MODULE_VERSION` error.**
 better-sqlite3 was rebuilt for a different Node. Rebuild it for the project runtime:
