@@ -246,6 +246,44 @@
   .mermaid { text-align: center; margin: 4px 0 0; line-height: 1.3; }
   .mermaid svg { max-width: 100%; height: auto; }
 
+  /* ---- worked example ---- */
+  .eg-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--faint);
+    margin: 18px 0 7px;
+  }
+  pre.eg-code {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 13px 15px;
+    margin: 0 0 6px;
+    color: var(--text);
+    line-height: 1.5;
+    overflow-x: auto;
+  }
+  pre.eg-code .jk { color: var(--chain); }
+  pre.eg-code .jv { color: var(--opencode); }
+  .eg-out {
+    font-family: var(--mono);
+    font-size: 13px;
+    background: var(--bg);
+    border-left: 3px solid var(--green);
+    border-radius: 0 8px 8px 0;
+    padding: 11px 15px;
+    margin: 0 0 6px;
+    color: var(--green);
+  }
+  .eg-out .lane-tag { color: var(--opencode); }
+  ol.hops { margin: 0 0 18px; padding-left: 20px; }
+  ol.hops li { padding: 7px 0; border-bottom: 1px solid var(--line-soft); }
+  ol.hops li:last-child { border-bottom: none; }
+
   table.map { width: 100%; border-collapse: collapse; margin: 18px 0; font-size: 14px; }
   table.map th, table.map td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
   table.map th { color: var(--muted); font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; font-weight: 500; }
@@ -278,6 +316,7 @@
 
 <nav class="toc">
   <ol>
+    <li><a href="#stack"><span class="n">0</span>The stack</a></li>
     <li><a href="#flow1"><span class="n">1</span>Wallet + funding</a></li>
     <li><a href="#flow2"><span class="n">2</span>Credentials into containers</a></li>
     <li><a href="#flow3"><span class="n">3</span>Events + SSE</a></li>
@@ -288,9 +327,110 @@
 
 <main class="wrap">
 
-  <p class="muted" style="margin-top:40px">
-    One process owns a run: its lifecycle, the two containers, the credentials, and the append-only event journal in SQLite. The arena runs on a private chain built only for practice puzzles. Each puzzle is a small Solidity contract with an intended solution, like an advent-of-code box. Nothing here is a live system.
-  </p>
+  <!-- ============ 00 · THE STACK ============ -->
+  <section id="stack">
+    <div class="sec-head">
+      <span class="num">00</span>
+      <h2>The stack</h2>
+    </div>
+    <p>One Node process runs the whole arena. Fastify serves the HTTP and SSE routes; RunManager owns the run lifecycle and the two drivers. Docker isolates the entrants, one hardened container each, and each container carries the burner's <code>WALLET_ADDRESS</code>, <code>WALLET_PRIVATE_KEY</code>, and <code>ETH_RPC_URL</code> as env. SQLite is the only store: events, run and entrant rows, burner keys, and scores. A private hardhat or anvil chain at chainId <code>31337</code> is the game board. The Vite/React frontend holds no state of its own; it watches the event stream.</p>
+    <p class="muted">The chain hosts only practice puzzles. Each puzzle is a small Solidity contract with an intended solution, like an advent-of-code box. Nothing here is a live system.</p>
+
+    <figure class="diagram">
+      <pre class="mermaid">
+flowchart LR
+    FE["browser frontend, Vite/React"]
+    BK["backend: Fastify HTTP + SSE, RunManager, drivers"]
+    DB["SQLite file"]
+    CH["local chain: hardhat/anvil 8545, chainId 31337"]
+    subgraph docker ["Docker Engine · dockerode · CapDrop ALL, per-entrant bridge"]
+      C1["codex container"]
+      C2["opencode container"]
+    end
+    BK -->|journal + state writes| DB
+    DB -->|snapshot + replay reads| BK
+    BK -.->|SSE EventSource| FE
+    BK -->|auth.json + config.toml at /creds/codex| C1
+    BK -->|OPENROUTER_API_KEY env| C2
+    BK -->|funds + watches via viem| CH
+    C1 -.->|host.docker.internal:8545| CH
+    C2 -.->|host.docker.internal:8545| CH
+    classDef own fill:#15251f,stroke:#7ad6b0,color:#dbeee4;
+    classDef ext fill:#171d29,stroke:#3a4353,color:#9aa6b8;
+    class BK,DB own;
+    class FE,CH,C1,C2 ext;
+      </pre>
+      <figcaption>One process, four dependencies · Docker, SQLite, chain, browser</figcaption>
+    </figure>
+
+    <h3>What lives in SQLite</h3>
+    <p>One file, six tables. Every burner key and every event row sits here in plaintext; it is a local demo store, wiped by deleting the file. <span class="path">src/db/schema.ts</span></p>
+    <table class="map">
+      <thead><tr><th>Table</th><th>What's in it</th><th>Written by</th><th>Read by</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><code>events</code></td>
+          <td>Every arena event as a JSON row (<code>payload_json</code>), plus a global autoincrement <code>id</code>, a per-<code>(run_id, source)</code> <code>seq</code>, <code>ts</code>, and <code>type</code>.</td>
+          <td><code>journal.append</code>, the single writer.</td>
+          <td><code>journal.after</code> for SSE replay, live subscribers; the snapshot reads <code>max(id)</code>.</td>
+        </tr>
+        <tr>
+          <td><code>runs</code></td>
+          <td>One row per run: <code>state</code>, <code>preset</code>, timestamps, <code>idempotency_key</code>.</td>
+          <td>RunManager, on each state transition.</td>
+          <td>RunManager snapshot.</td>
+        </tr>
+        <tr>
+          <td><code>entrants</code></td>
+          <td>One row per lane: <code>harness</code>, <code>model</code>, <code>address</code>, <code>status</code>, <code>flags</code>. The wallet gate sets <code>address</code>.</td>
+          <td>RunManager and harness-driver <code>setStatus</code>.</td>
+          <td>Run snapshot.</td>
+        </tr>
+        <tr>
+          <td><code>wallets</code></td>
+          <td>Burner keypair per <code>(run, entrant)</code>: <code>address</code> and <code>private_key</code>, in plaintext. Local demo burners, no end-of-run sweep.</td>
+          <td><code>createWallet</code> in the wallet gate.</td>
+          <td><code>getWallet</code> in the codex/opencode adapters (inject key env) and <code>exportKeyfile</code>.</td>
+        </tr>
+        <tr>
+          <td><code>scores</code></td>
+          <td>One row per minted flag: <code>challenge_id</code>, <code>token_id</code>, <code>tx_hash</code>, <code>block_number</code>. Unique on <code>(run, address, challenge)</code>.</td>
+          <td>The flag watcher. <span class="path">src/chain/flag-watcher.ts</span></td>
+          <td>The flag watcher, to skip flags already minted.</td>
+        </tr>
+        <tr>
+          <td><code>chain_cursors</code></td>
+          <td>Last processed block per <code>(run, contract)</code>, so the watcher resumes without rescanning.</td>
+          <td>The flag watcher.</td>
+          <td>The flag watcher.</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ============ GLOSSARY ============ -->
+  <section id="glossary">
+    <div class="sec-head">
+      <span class="num">·</span>
+      <h2>Words this page uses</h2>
+    </div>
+    <p class="muted">Every term below is a name in the code, so you can grep it. Read this once and the five flows read straight.</p>
+    <table class="map">
+      <thead><tr><th>Term</th><th>Plain meaning</th><th>Where in code</th></tr></thead>
+      <tbody>
+        <tr><td><code>run</code></td><td>One race: two agents on the same puzzle chain, from start to finish.</td><td><span class="path">src/run-manager.ts</span></td></tr>
+        <tr><td><code>entrant</code></td><td>One competitor in a run: a coding agent with its own container and burner wallet.</td><td><span class="path">entrants</span> table</td></tr>
+        <tr><td><code>lane</code></td><td>One entrant's column in the UI. It shows only that entrant's events.</td><td><code>eventsForSource</code></td></tr>
+        <tr><td><code>harness</code></td><td>The CLI that drives an agent inside the container: <code>codex</code> or <code>opencode</code>.</td><td><span class="path">src/adapters/</span></td></tr>
+        <tr><td><code>source</code></td><td>Who a row belongs to: an entrant id for a lane event, or <code>'run'</code> for a run-level one.</td><td><code>events.source</code></td></tr>
+        <tr><td><code>id</code> vs <code>seq</code></td><td><code>id</code> is one global counter across all runs, so within a run it can skip. <code>seq</code> counts 1, 2, 3… per <code>(run, source)</code> with no holes.</td><td><span class="path">src/journal.ts</span></td></tr>
+        <tr><td><code>journal</code></td><td>The append-only <code>events</code> table: every fact in a run, one row, only ever added.</td><td><span class="path">src/journal.ts</span></td></tr>
+        <tr><td><code>SSE</code></td><td>Server-Sent Events: an HTTP response the server holds open and keeps writing to, which the browser reads live.</td><td><span class="path">src/server.ts</span></td></tr>
+        <tr><td><code>gate</code></td><td>A step that must finish before the run moves on. The wallet gate makes burners; the funding gate funds them.</td><td><span class="path">src/chain/funding-gate.ts</span></td></tr>
+        <tr><td><code>steer</code></td><td>A free-text turn an operator injects into a live agent mid-race.</td><td><code>RunManager.steer</code></td></tr>
+      </tbody>
+    </table>
+  </section>
 
   <!-- ============ FLOW 1 ============ -->
   <section id="flow1">
@@ -428,7 +568,9 @@ flowchart LR
       <span class="num">03</span>
       <h2>Server-side events and the SSE feed</h2>
     </div>
-    <p>Every fact in a run is one row in an append-only journal. The frontend reads that journal over one server-sent-events stream per run. A reconnect replays from where it left off with no gap and no duplicate.</p>
+    <p>Every fact in a run is one row in an append-only journal: a log the code only adds to, never edits. The frontend reads that journal live over one SSE stream per run, and a reconnect picks up where it left off with no gap and no duplicate.</p>
+
+    <p>SSE is Server-Sent Events: one ordinary HTTP response the server never closes. It keeps appending lines as events happen, and the browser's built-in <code>EventSource</code> reads them live. On a dropped connection <code>EventSource</code> reconnects on its own and resends the last id it saw in a <code>Last-Event-ID</code> header, so the server replays only what the browser missed. That free resume is why SSE fits this one-way feed better than a websocket, with no second protocol to run.</p>
 
     <figure class="diagram">
       <pre class="mermaid">
@@ -456,6 +598,7 @@ flowchart LR
     <h3>The journal</h3>
     <ul class="facts">
       <li><code>append</code> assigns two numbers in one transaction: a global autoincrement <code>id</code> shared across all runs, and a <code>seq</code> that counts up per <code>(runId, source)</code>. <span class="path">src/journal.ts</span></li>
+      <li>The <code>id</code> is one counter over every run, so inside a single run it can jump when another run writes in between. The <code>seq</code> counts 1, 2, 3… for one <code>(run, source)</code> with no holes. Section&nbsp;4 leans on that difference.</li>
       <li><code>source</code> is the entrant id for a lane event, or the literal <code>'run'</code> for a run-level event like a state change.</li>
       <li>After the write, <code>append</code> pushes the event to any live subscriber for that run. <code>after(runId, afterId)</code> reads back every row past a given id, in id order.</li>
     </ul>
@@ -466,6 +609,36 @@ flowchart LR
       <li>Replay then live, with no lost event in the seam: it subscribes first and buffers arriving events in a <code>pending</code> list while it replays history, then sorts the buffer by id and flushes it. <code>send</code> drops anything at or below the last id it wrote, so the overlap never double-sends.</li>
       <li>It writes each event as <code>id: &lt;n&gt;</code> + <code>data: &lt;json&gt;</code>, and sends a <code>: heartbeat</code> comment every 15&nbsp;s to hold the connection open.</li>
     </ul>
+
+    <h3>One tool call, end to end</h3>
+    <p>The same pipe, walked with one real event from a live run. The opencode agent ran a <code>bash</code> tool call. Here is the row the journal stored:</p>
+
+    <p class="eg-label">the event row</p>
+    <pre class="eg-code">{
+  <span class="jk">"id"</span>: <span class="jv">101</span>,
+  <span class="jk">"runId"</span>: <span class="jv">"596e5eb4-…"</span>,
+  <span class="jk">"source"</span>: <span class="jv">"opencode-1"</span>,
+  <span class="jk">"seq"</span>: <span class="jv">71</span>,
+  <span class="jk">"ts"</span>: <span class="jv">"2026-07-23T05:39:21.536Z"</span>,
+  <span class="jk">"type"</span>: <span class="jv">"tool.call"</span>,
+  <span class="jk">"payload"</span>: {
+    <span class="jk">"entrantId"</span>: <span class="jv">"opencode-1"</span>,
+    <span class="jk">"tool"</span>: <span class="jv">"bash"</span>,
+    <span class="jk">"detail"</span>: <span class="jv">"cast call --rpc-url \"$ETH_RPC_URL\" --from \"$WALLET_ADDRESS\" …"</span>
+  }
+}</pre>
+
+    <ol class="hops">
+      <li>The opencode harness inside the container runs the <code>bash</code> tool and prints one JSON line to stdout.</li>
+      <li>The container runner wraps that line as <code>{ev:"line"}</code> and sends it up the attachment stream. <span class="path">src/runtime/container.ts</span></li>
+      <li>The driver hands the line to the opencode parser, which turns it into a <code>tool.call</code> event. <span class="path">src/adapters/opencode-parser.ts</span> · <code>runTurn</code> in <span class="path">harness-driver.ts</span></li>
+      <li><code>journal.append</code> writes one row in the <code>events</code> table and stamps it: global <code>id</code> 101, <code>source</code> "opencode-1", <code>seq</code> 71. <span class="path">src/journal.ts</span></li>
+      <li>Every live subscriber gets the event, and the SSE stream writes <code>id: 101</code> then <code>data: {…}</code> into the open HTTP response. <span class="path">src/server.ts</span></li>
+      <li>In the browser, <code>EventSource</code> fires <code>onmessage</code>; <code>ingestEvent</code> sees id 101 is new and seq 71 follows 70, the lane filter routes it to the opencode-1 column, and <code>describeEvent</code> renders the line. <span class="path">packages/mock-frontend/src/feed-projection.ts</span> · <span class="path">main.tsx</span></li>
+    </ol>
+
+    <p class="eg-label">the feed row, in the opencode-1 lane</p>
+    <div class="eg-out"><span class="lane-tag">opencode-1</span> · calls bash: cast call --rpc-url "$ETH_RPC_URL" --from "$WALLET_ADDRESS" …</div>
   </section>
 
   <!-- ============ FLOW 4 ============ -->
@@ -503,8 +676,9 @@ flowchart TB
 
     <h3>Dedupe and gap detection</h3>
     <ul class="facts">
-      <li>Dedupe is on the global <code>id</code>: a reconnect replays a few events the client already has, and <code>seenIds</code> drops them. Returning the same state object lets React skip a re-render. <span class="path">packages/mock-frontend/src/feed-projection.ts</span></li>
-      <li>Gap detection is on <code>seq</code>, not <code>id</code>. The global id legitimately skips inside one run when another run writes, so it can't signal loss. A jump in a source's <code>seq</code> can: seq is contiguous per <code>(run, source)</code>, so a skip records a <code>FeedGap</code>.</li>
+      <li>Dedupe runs on the global <code>id</code>. After a reconnect the browser replays a few events it already saw; <code>seenIds</code> recognizes those ids and drops them, so nothing counts twice. Returning the same state object lets React skip a re-render. <span class="path">packages/mock-frontend/src/feed-projection.ts</span></li>
+      <li>Loss detection runs on <code>seq</code>, not <code>id</code>, because <code>id</code> can skip for an innocent reason (another run wrote in between) while a source's <code>seq</code> never does. If <code>opencode-1</code> jumps from seq 4 to seq 7, two events are gone: the UI records a <code>FeedGap</code> and shows a warning instead of a silently wrong race.</li>
+      <li>This is why both numbers exist. Without the id check a wifi blip could double-count a minted flag; without the seq check it could hide one, and the scoreboard would lie.</li>
     </ul>
 
     <h3>Lanes and the wallet header</h3>
@@ -576,6 +750,8 @@ flowchart TB
         <tr><td><span class="path">src/adapters/harness-driver.ts</span></td><td>Turn loop, steer queue, degraded state, event append.</td></tr>
         <tr><td><span class="path">src/runtime/container.ts</span></td><td>Docker container, network, mounts, hardening.</td></tr>
         <tr><td><span class="path">src/journal.ts</span></td><td>Append-only events: id, per-source seq, subscribe.</td></tr>
+        <tr><td><span class="path">src/db/schema.ts</span></td><td>The six SQLite tables: events, runs, entrants, wallets, scores, chain_cursors.</td></tr>
+        <tr><td><span class="path">src/chain/storage.ts</span></td><td>Creates the chain-side tables (wallets, scores, chain_cursors) and their indexes.</td></tr>
         <tr><td><span class="path">src/server.ts</span></td><td>Fastify routes, SSE replay-then-live.</td></tr>
         <tr><td><span class="path">packages/mock-frontend/src/feed-projection.ts</span></td><td>Dedupe, gap detect, lane split, wallet header, describeEvent.</td></tr>
       </tbody>
