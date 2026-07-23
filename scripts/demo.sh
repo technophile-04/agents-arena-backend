@@ -430,6 +430,22 @@ down() {
   stop_owned frontend "$FRONTEND_PID"
   stop_owned backend "$BACKEND_PID"
   stop_owned chain "$CHAIN_PID"
+  sweep_arena_containers
+}
+
+# Killing the backend mid-race orphans that run's containers: teardown lives in
+# the backend process, so the agents inside keep working and hitting the chain.
+sweep_arena_containers() {
+  local containers networks
+  containers="$(docker ps -aq --filter 'label=arena.runId' 2>/dev/null || true)"
+  if [ -n "$containers" ]; then
+    printf 'entrants: removing %s orphaned arena container(s)\n' "$(printf '%s\n' "$containers" | wc -l | tr -d ' ')"
+    printf '%s\n' "$containers" | xargs docker rm -f >/dev/null 2>&1 || true
+  fi
+  networks="$(docker network ls -q --filter 'label=arena.runId' 2>/dev/null || true)"
+  if [ -n "$networks" ]; then
+    printf '%s\n' "$networks" | xargs -n1 docker network rm >/dev/null 2>&1 || true
+  fi
 }
 
 case "${1:-}" in
