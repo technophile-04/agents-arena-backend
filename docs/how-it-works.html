@@ -4,6 +4,46 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Agents Arena — How it works today</title>
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: "base",
+    securityLevel: "loose",
+    fontFamily: "'JetBrains Mono', ui-monospace, monospace",
+    themeVariables: {
+      darkMode: true,
+      background: "#131826",
+      primaryColor: "#19202f",
+      primaryBorderColor: "#253044",
+      primaryTextColor: "#e7ecf4",
+      secondaryColor: "#19202f",
+      tertiaryColor: "#131826",
+      lineColor: "#5b6879",
+      textColor: "#e7ecf4",
+      nodeBorder: "#253044",
+      clusterBkg: "#10151f",
+      clusterBorder: "#253044",
+      edgeLabelBackground: "#131826",
+      actorBkg: "#19202f",
+      actorBorder: "#7ad6b0",
+      actorTextColor: "#e7ecf4",
+      actorLineColor: "#5b6879",
+      signalColor: "#8a97ac",
+      signalTextColor: "#c2cbd9",
+      labelBoxBkgColor: "#19202f",
+      labelBoxBorderColor: "#253044",
+      labelTextColor: "#e7ecf4",
+      loopTextColor: "#c2cbd9",
+      noteBkgColor: "#1f2a1f",
+      noteTextColor: "#dff3ea",
+      noteBorderColor: "#7ad6b0",
+      activationBkgColor: "#253044",
+      activationBorderColor: "#5cc8f2",
+      sequenceNumberColor: "#0c0f16"
+    }
+  });
+</script>
 <style>
   :root {
     --bg: #0c0f16;
@@ -203,68 +243,8 @@
     text-align: center;
   }
 
-  .box {
-    font-family: var(--mono);
-    font-size: 12.5px;
-    background: var(--surface-2);
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    padding: 9px 12px;
-    text-align: center;
-    line-height: 1.4;
-  }
-  .box .b-title { color: var(--text); display: block; font-size: 13px; }
-  .box .b-sub { color: var(--faint); display: block; font-size: 10.5px; margin-top: 3px; }
-  .box.state { border-color: var(--purple); color: var(--purple); }
-  .box.gate { border-color: var(--steer); color: var(--steer); }
-  .box.run { border-color: var(--green); color: var(--green); }
-  .box.codex { border-color: var(--codex); }
-  .box.opencode { border-color: var(--opencode); }
-  .box.chain { border-color: var(--chain); color: var(--chain); }
-
-  /* pipeline row */
-  .pipe { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: center; }
-  .pipe .box { flex: 1 1 108px; min-width: 92px; }
-  .arrow { color: var(--faint); font-family: var(--mono); font-size: 18px; flex: none; }
-  .arrow.down { display: block; text-align: center; margin: 6px 0; }
-
-  .stack { display: flex; flex-direction: column; gap: 10px; }
-  .cols2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-  .cols2 .arrow { text-align: center; }
-
-  .container-card {
-    border: 1px dashed var(--line);
-    border-radius: 8px;
-    padding: 14px;
-    background: var(--bg);
-  }
-  .container-card .ct-head {
-    font-family: var(--mono);
-    font-size: 11px;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: var(--faint);
-    margin-bottom: 10px;
-  }
-  .mount {
-    font-family: var(--mono);
-    font-size: 11.5px;
-    background: var(--surface-2);
-    border: 1px solid var(--line-soft);
-    border-radius: 6px;
-    padding: 7px 10px;
-    margin-bottom: 7px;
-    color: var(--muted);
-  }
-  .mount .k { color: var(--chain); }
-  .mount .secret { color: var(--steer); }
-
-  .legend { display: flex; gap: 16px; flex-wrap: wrap; font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 4px; }
-  .legend span:before { content: "■ "; }
-  .legend .l-state:before { color: var(--purple); }
-  .legend .l-gate:before { color: var(--steer); }
-  .legend .l-run:before { color: var(--green); }
-  .legend .l-chain:before { color: var(--chain); }
+  .mermaid { text-align: center; margin: 4px 0 0; line-height: 1.3; }
+  .mermaid svg { max-width: 100%; height: auto; }
 
   table.map { width: 100%; border-collapse: collapse; margin: 18px 0; font-size: 14px; }
   table.map th, table.map td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
@@ -321,24 +301,32 @@
     <p>Starting a run walks a state machine. Each step is a legal transition; an illegal one throws. The wallet and funding work happens between <code>preparing</code> and <code>ready</code>, so an agent never boots without a funded burner to sign with.</p>
 
     <figure class="diagram">
-      <div class="pipe">
-        <div class="box state"><span class="b-title">created</span><span class="b-sub">run row + entrants</span></div>
-        <span class="arrow">&rarr;</span>
-        <div class="box state"><span class="b-title">preparing</span><span class="b-sub">wallets, then containers</span></div>
-        <span class="arrow">&rarr;</span>
-        <div class="box gate"><span class="b-title">awaiting_funding</span><span class="b-sub">watch + fund</span></div>
-        <span class="arrow">&rarr;</span>
-        <div class="box state"><span class="b-title">ready</span><span class="b-sub">both held</span></div>
-        <span class="arrow">&rarr;</span>
-        <div class="box run"><span class="b-title">running</span><span class="b-sub">one start time</span></div>
-      </div>
-      <span class="arrow down">&darr; on any failure or operator stop</span>
-      <div class="pipe">
-        <div class="box state" style="border-color:var(--faint);color:var(--muted)">running &rarr; stopping &rarr; finished</div>
-        <span class="arrow">/</span>
-        <div class="box" style="border-color:var(--red);color:var(--red)">failed</div>
-      </div>
-      <figcaption>Run state machine · LEGAL_TRANSITIONS in run-manager.ts</figcaption>
+      <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    box rgb(23,29,41) external
+    actor OP as operator
+    end
+    participant RM as RunManager
+    participant WG as walletGate
+    participant DR as driver.prepare
+    participant FG as fundingGate
+    box rgb(23,29,41) external
+    participant CH as dev chain 31337
+    end
+    OP->>RM: start run
+    RM->>RM: state preparing
+    WG->>WG: generate burner per entrant
+    WG-->>RM: emit wallet.assigned
+    RM->>DR: create containers with key env
+    DR-->>RM: state awaiting_funding
+    FG->>CH: fund 0.1 ETH from account 0
+    FG->>CH: evm_mine one block
+    CH-->>FG: funding.balance events
+    FG-->>RM: both reach 0.05 ETH
+    RM->>RM: state ready then running
+      </pre>
+      <figcaption>Run order · walletGate then fundingGate in run-manager.ts</figcaption>
     </figure>
 
     <h3>How the burner is born</h3>
@@ -350,7 +338,7 @@
     </ul>
 
     <h3>How the burner gets funded</h3>
-    <p>After both containers prepare, the run moves to <code>awaiting_funding</code> and the funding gate runs. It starts the balance watcher, then funds the burners, and holds the run until both cross the line.</p>
+    <p>After both containers prepare, the run moves to <code>awaiting_funding</code> and the funding gate runs. It starts the balance watcher, then funds the burners, and holds the run until both are funded.</p>
     <ul class="facts">
       <li>The watcher <code>awaitFunding</code> starts first and polls every 500&nbsp;ms. It reads each balance at <code>head &minus; confirmations</code>, not at head. <span class="path">src/chain/funding-watcher.ts</span></li>
       <li>Funding sends <code>0.1&nbsp;ETH</code> to each burner from Hardhat dev account&nbsp;0 (the well-known local key). It only runs when the profile is <code>local</code> and the chain id is <code>31337</code>. <span class="path">src/chain/funding-gate.ts</span> · <code>fundLocalEntrants</code></li>
@@ -372,27 +360,36 @@
     <p>Each entrant runs in its own hardened container. Before the container starts, the driver builds a temporary credential directory on the host and mounts it in. Login files go in over a mount; the wallet and the RPC URL go in as environment variables.</p>
 
     <figure class="diagram">
-      <div class="cols2">
-        <div class="container-card">
-          <div class="ct-head" style="color:var(--codex)">codex entrant · /work</div>
-          <div class="mount"><span class="k">mount</span> host temp dir &rarr; <code>/creds/codex</code></div>
-          <div class="mount">auth.json · config.toml</div>
-          <div class="mount"><span class="k">env</span> CODEX_HOME=/creds/codex</div>
-          <div class="mount"><span class="k">env</span> ETH_RPC_URL</div>
-          <div class="mount"><span class="secret">env</span> WALLET_ADDRESS · WALLET_PRIVATE_KEY</div>
-        </div>
-        <div class="container-card">
-          <div class="ct-head" style="color:var(--opencode)">opencode entrant · /work</div>
-          <div class="mount"><span class="k">mount</span> host temp dir &rarr; <code>/creds/opencode</code></div>
-          <div class="mount"><span class="secret">env</span> OPENROUTER_API_KEY</div>
-          <div class="mount"><span class="k">env</span> ETH_RPC_URL</div>
-          <div class="mount"><span class="secret">env</span> WALLET_ADDRESS · WALLET_PRIVATE_KEY</div>
-        </div>
-      </div>
-      <span class="arrow down">&darr; both reach the host chain over</span>
-      <div class="pipe">
-        <div class="box chain"><span class="b-title">host.docker.internal:8545</span><span class="b-sub">ExtraHosts: host-gateway</span></div>
-      </div>
+      <pre class="mermaid">
+flowchart LR
+    subgraph host [host]
+      A["auth.json"]
+      T["temp credential dir"]
+      CF["config.toml"]
+      W["wallet row in sqlite"]
+    end
+    subgraph cx [codex container]
+      CXm["/creds/codex mount"]
+      CXe["ETH_RPC_URL / WALLET_ADDRESS / WALLET_PRIVATE_KEY"]
+    end
+    subgraph oc [opencode container]
+      OCk["OPENROUTER_API_KEY env"]
+      OCe["ETH_RPC_URL / WALLET_ADDRESS / WALLET_PRIVATE_KEY"]
+    end
+    CH["dev chain 8545"]
+    A --> T
+    CF --> T
+    T -->|mount| CXm
+    T -->|env| OCk
+    W -->|env| CXe
+    W -->|env| OCe
+    CXe -.->|host.docker.internal:8545| CH
+    OCe -.->|host.docker.internal:8545| CH
+    classDef own fill:#15251f,stroke:#7ad6b0,color:#dbeee4;
+    classDef ext fill:#171d29,stroke:#3a4353,color:#9aa6b8;
+    class A,CF,T,W,CXm,CXe,OCk,OCe own;
+    class CH ext;
+      </pre>
       <figcaption>Per-entrant credential mount + env · codex.ts / opencode.ts</figcaption>
     </figure>
 
@@ -434,21 +431,25 @@
     <p>Every fact in a run is one row in an append-only journal. The frontend reads that journal over one server-sent-events stream per run. A reconnect replays from where it left off with no gap and no duplicate.</p>
 
     <figure class="diagram">
-      <div class="pipe">
-        <div class="box"><span class="b-title">append()</span><span class="b-sub">drivers + gates</span></div>
-        <span class="arrow">&rarr;</span>
-        <div class="box"><span class="b-title">events table</span><span class="b-sub">id · seq · source</span></div>
-        <span class="arrow">&rarr;</span>
-        <div class="box gate"><span class="b-title">GET /runs/:id/events</span><span class="b-sub">replay then live</span></div>
-        <span class="arrow">&rarr;</span>
-        <div class="box opencode"><span class="b-title">EventSource</span><span class="b-sub">browser</span></div>
-      </div>
-      <span class="arrow down">&darr; each row carries</span>
-      <div class="pipe">
-        <div class="box"><span class="b-title">id</span><span class="b-sub">journal-wide, global</span></div>
-        <div class="box"><span class="b-title">seq</span><span class="b-sub">per (run, source)</span></div>
-        <div class="box"><span class="b-title">source</span><span class="b-sub">entrant id · or "run"</span></div>
-      </div>
+      <pre class="mermaid">
+flowchart LR
+    AP["journal.append"]
+    EV["sqlite events table"]
+    RP["after id replay"]
+    SB["subscribe live + pending buffer"]
+    SSE["SSE response"]
+    ES["browser EventSource"]
+    AP --> EV
+    EV -->|replays after id| RP
+    AP -->|pushes to subscriber| SB
+    RP --> SSE
+    SB -->|buffers during replay| SSE
+    SSE --> ES
+    classDef own fill:#15251f,stroke:#7ad6b0,color:#dbeee4;
+    classDef ext fill:#171d29,stroke:#3a4353,color:#9aa6b8;
+    class AP,EV,RP,SB,SSE own;
+    class ES ext;
+      </pre>
       <figcaption>Journal &rarr; SSE &rarr; browser · journal.ts / server.ts</figcaption>
     </figure>
 
@@ -473,24 +474,30 @@
       <span class="num">04</span>
       <h2>How the frontend syncs</h2>
     </div>
-    <p>The frontend keeps no clever server mirror. It folds the event stream into one state object. Reconnect overlap gets deduped, real data loss gets flagged, and every event type renders as a line so the feed never blanks.</p>
+    <p>The frontend folds the event stream into one state object. It dedupes reconnect overlap, flags real data loss, and renders every event type as a line, so the feed never blanks.</p>
 
     <figure class="diagram">
-      <div class="stack">
-        <div class="box"><span class="b-title">ingestEvent(state, event)</span><span class="b-sub">one pure fold per event</span></div>
-        <span class="arrow down">&darr;</span>
-        <div class="pipe">
-          <div class="box"><span class="b-title">seenIds.has(id)?</span><span class="b-sub">yes &rarr; drop, same state</span></div>
-          <div class="box"><span class="b-title">seq &gt; lastSeq+1?</span><span class="b-sub">yes &rarr; record gap</span></div>
-        </div>
-        <span class="arrow down">&darr;</span>
-        <div class="cols2">
-          <div class="box codex"><span class="b-title">lane: codex-1</span><span class="b-sub">source === entrantId</span></div>
-          <div class="box opencode"><span class="b-title">lane: opencode-1</span><span class="b-sub">source === entrantId</span></div>
-        </div>
-        <span class="arrow down">&darr; each lane header</span>
-        <div class="box chain"><span class="b-title">deriveLaneWallet</span><span class="b-sub">address + funding from snapshot + events</span></div>
-      </div>
+      <pre class="mermaid">
+flowchart TB
+    EVT["event arrives"]
+    DED{"seenIds.has global id?"}
+    GAP{"seq gt lastSeq + 1?"}
+    LANE["lane split by source"]
+    HDR["deriveLaneWallet (lane header)"]
+    ROW["describeEvent (feed rows)"]
+    EVT --> DED
+    DED -->|dup| DROP["drop, same state"]
+    DED -->|new id| GAP
+    GAP -->|skip| FG["record FeedGap"]
+    GAP -->|contiguous| LANE
+    FG --> LANE
+    LANE --> HDR
+    LANE --> ROW
+    classDef own fill:#15251f,stroke:#7ad6b0,color:#dbeee4;
+    classDef ext fill:#171d29,stroke:#3a4353,color:#9aa6b8;
+    class EVT,DED,GAP,LANE,HDR,ROW own;
+    class DROP,FG ext;
+      </pre>
       <figcaption>feed-projection.ts · dedupe, gap-detect, lane split, wallet header</figcaption>
     </figure>
 
@@ -517,26 +524,27 @@
     <p>An operator can inject a free-text turn into a live agent mid-race. If the agent is mid-turn, the steer waits in a queue and lands when the turn ends. If it's idle, it resumes the same harness session inside the same container.</p>
 
     <figure class="diagram">
-      <div class="pipe">
-        <div class="box gate"><span class="b-title">POST …/steer</span><span class="b-sub">202 accepted</span></div>
-        <span class="arrow">&rarr;</span>
-        <div class="box"><span class="b-title">RunManager.steer</span><span class="b-sub">find entrant</span></div>
-        <span class="arrow">&rarr;</span>
-        <div class="box"><span class="b-title">driver.steer</span><span class="b-sub">check state</span></div>
-      </div>
-      <span class="arrow down">&darr; branch on entrant state</span>
-      <div class="pipe">
-        <div class="box" style="border-color:var(--red);color:var(--red)"><span class="b-title">degraded</span><span class="b-sub">reject, log error</span></div>
-        <div class="box gate"><span class="b-title">turn in flight</span><span class="b-sub">push to queuedSteers</span></div>
-        <div class="box run"><span class="b-title">idle</span><span class="b-sub">resume session now</span></div>
-      </div>
-      <span class="arrow down">&darr; turn ends &rarr; finishTurn drains one queued steer</span>
-      <div class="pipe">
-        <div class="box codex"><span class="b-title">codex exec resume &lt;id&gt;</span></div>
-        <div class="box opencode"><span class="b-title">opencode run -s &lt;id&gt;</span></div>
-        <span class="arrow">&rarr;</span>
-        <div class="box"><span class="b-title">entrant.steered</span><span class="b-sub">event on the lane</span></div>
-      </div>
+      <pre class="mermaid">
+flowchart TB
+    P["POST steer, 202 accepted"]
+    RS["RunManager.steer to driver.steer"]
+    DEG["degraded entrant, reject"]
+    Q{"turn in flight?"}
+    QS["queuedSteers, deliver on turn end"]
+    RES["resume session in same container"]
+    EV["entrant.steered on lane"]
+    P --> RS
+    RS -->|degraded| DEG
+    RS -->|live| Q
+    Q -->|yes| QS
+    Q -->|no| RES
+    QS -->|finishTurn| RES
+    RES --> EV
+    classDef own fill:#15251f,stroke:#7ad6b0,color:#dbeee4;
+    classDef ext fill:#171d29,stroke:#3a4353,color:#9aa6b8;
+    class P,RS,Q,QS,RES,EV own;
+    class DEG ext;
+      </pre>
       <figcaption>Steer path · server.ts &rarr; run-manager.ts &rarr; harness-driver.ts</figcaption>
     </figure>
 
