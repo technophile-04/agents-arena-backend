@@ -4,12 +4,14 @@ import { and, asc, count, eq, max } from 'drizzle-orm';
 
 import type {
   CreateRunRequest,
+  EntrantSolve,
   EntrantSummary,
   HarnessId,
   RunSnapshot,
   RunState,
 } from './contract.js';
-import { entrants, events, runs } from './db/schema.js';
+import { entrants, events, runs, scores } from './db/schema.js';
+import { ensureChainTables } from './chain/storage.js';
 import type { EventJournal } from './journal.js';
 import type { EntrantDriver, EntrantRecord, RunRecord } from './adapters/types.js';
 
@@ -126,6 +128,8 @@ export class RunManager {
     this.prepareTimeoutMs = options.prepareTimeoutMs ?? DEFAULT_PREPARE_TIMEOUT_MS;
     this.fundingTimeoutMs = options.fundingTimeoutMs ?? DEFAULT_FUNDING_TIMEOUT_MS;
     this.walletGate = options.walletGate ?? passThroughWalletGate;
+    // snapshot() reads scores, which chainless presets never create otherwise.
+    ensureChainTables(journal.database);
   }
 
   async create(input: CreateRunRequest): Promise<CreateRunResult> {
@@ -177,14 +181,19 @@ export class RunManager {
 
   snapshot(runId: string): RunSnapshot {
     const run = this.requireRun(runId);
-    const entrantSummaries = this.entrants(runId).map<EntrantSummary>((entrant) => ({
-      id: entrant.id,
-      harness: entrant.harness,
-      model: entrant.model,
-      address: entrant.address,
-      status: entrant.status,
-      flags: entrant.flags,
-    }));
+    const solvesByEntrant = this.solvesByEntrant(runId);
+    const entrantSummaries = this.entrants(runId).map<EntrantSummary>((entrant) => {
+      const solves = solvesByEntrant.get(entrant.id) ?? [];
+      return {
+        id: entrant.id,
+        harness: entrant.harness,
+        model: entrant.model,
+        address: entrant.address,
+        status: entrant.status,
+        flags: solves.length,
+        solves,
+      };
+    });
     const lastEvent = this.journal.database
       .select({ id: max(events.id) })
       .from(events)
@@ -378,6 +387,31 @@ export class RunManager {
       throw new RunNotFoundError(`Run not found: ${runId}`);
     }
     return run;
+  }
+
+  // The entrants.flags column is never written after creation, so both the solved
+  // list and the count come from scores rows — recordSolve keeps those 1:1 with
+  // score.flag events, one per confirmed, deduped capture.
+  private solvesByEntrant(runId: string): Map<string, EntrantSolve[]> {
+    const rows = this.journal.database
+      .select({
+        entrantId: scores.entrantId,
+        challengeId: scores.challengeId,
+        txHash: scores.txHash,
+        solvedAt: scores.solvedAt,
+      })
+      .from(scores)
+      .where(eq(scores.runId, runId))
+      .orderBy(asc(scores.id))
+      .all();
+
+    const byEntrant = new Map<string, EntrantSolve[]>();
+    for (const row of rows) {
+      const solves = byEntrant.get(row.entrantId) ?? [];
+      solves.push({ challengeId: row.challengeId, ts: row.solvedAt, txHash: row.txHash });
+      byEntrant.set(row.entrantId, solves);
+    }
+    return byEntrant;
   }
 
   private entrants(runId: string): EntrantRecord[] {

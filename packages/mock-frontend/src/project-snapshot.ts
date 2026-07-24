@@ -14,5 +14,21 @@ export function projectSnapshot(current: RunSnapshot | undefined, event: ArenaEv
         : entrant),
     };
   }
+  if (event.type === 'score.flag') {
+    return {
+      ...current,
+      lastEventId: event.id,
+      entrants: current.entrants.map((entrant) => entrant.id === event.payload.entrantId
+        ? {
+          ...entrant,
+          flags: entrant.flags + 1,
+          solves: [
+            ...entrant.solves,
+            { challengeId: event.payload.challengeId, ts: event.ts, txHash: event.payload.txHash },
+          ],
+        }
+        : entrant),
+    };
+  }
   return { ...current, lastEventId: event.id };
 }

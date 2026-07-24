@@ -15,6 +15,7 @@ const snapshot: RunSnapshot = {
       address: null,
       status: 'idle',
       flags: 0,
+      solves: [],
     },
   ],
   startedAt: null,
@@ -49,5 +50,23 @@ describe('projectSnapshot', () => {
     };
 
     expect(projectSnapshot(snapshot, event)?.entrants[0]?.status).toBe('working');
+  });
+
+  it('projects score.flag events into flags and solves', () => {
+    const event: ArenaEvent = {
+      id: 4,
+      runId: 'run-1',
+      source: 'chain:flags',
+      seq: 1,
+      ts: '2026-07-22T00:00:02.000Z',
+      type: 'score.flag',
+      payload: { entrantId: 'codex-1', challengeId: 3, txHash: '0xabc', tokenId: '1' },
+    };
+
+    const projected = projectSnapshot(snapshot, event)?.entrants[0];
+    expect(projected?.flags).toBe(1);
+    expect(projected?.solves).toEqual([
+      { challengeId: 3, ts: '2026-07-22T00:00:02.000Z', txHash: '0xabc' },
+    ]);
   });
 });
