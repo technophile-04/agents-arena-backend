@@ -52,6 +52,20 @@ describe('projectSnapshot', () => {
     expect(projectSnapshot(snapshot, event)?.entrants[0]?.status).toBe('working');
   });
 
+  it('ignores replayed events already covered by the snapshot', () => {
+    const replayed: ArenaEvent = {
+      id: 1,
+      runId: 'run-1',
+      source: 'chain:flags',
+      seq: 1,
+      ts: '2026-07-22T00:00:00.000Z',
+      type: 'score.flag',
+      payload: { entrantId: 'codex-1', challengeId: 3, txHash: '0xabc', tokenId: '1' },
+    };
+
+    expect(projectSnapshot(snapshot, replayed)).toBe(snapshot);
+  });
+
   it('projects score.flag events into flags and solves', () => {
     const event: ArenaEvent = {
       id: 4,

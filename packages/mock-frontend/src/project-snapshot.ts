@@ -2,6 +2,9 @@ import type { ArenaEvent, RunSnapshot } from '../../../contract/arena-types';
 
 export function projectSnapshot(current: RunSnapshot | undefined, event: ArenaEvent): RunSnapshot | undefined {
   if (current === undefined) return current;
+  // The snapshot already reflects everything up to lastEventId; replayed events
+  // must not re-apply (score.flag appends, so it is not idempotent).
+  if (event.id <= current.lastEventId) return current;
   if (event.type === 'run.state') {
     return { ...current, state: event.payload.state, lastEventId: event.id };
   }
